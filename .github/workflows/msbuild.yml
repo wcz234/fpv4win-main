@@ -25,7 +25,7 @@ jobs:
 
       - name: Set up cache for vcpkg/installed
         id: cache-vcpkg
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: vcpkg/installed
           key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg/installed/**/*') }}
@@ -35,19 +35,14 @@ jobs:
       - name: Build
         working-directory: ${{env.GITHUB_WORKSPACE}}
         run: |
-          git submodule update --init
-          if (-Not (Test-Path -Path vcpkg )) { New-Item -ItemType Directory -Path vcpkg }
-          cd vcpkg
-          git init
-          git remote add origin https://github.com/microsoft/vcpkg.git
-          git fetch origin
-          git checkout -b master --track origin/master
-          git checkout b27651341123a59f7187b42ef2bc476284afb310
-          .\bootstrap-vcpkg.bat
-          .\vcpkg integrate install
-          .\vcpkg install libusb libpcap libsodium ffmpeg opencv4[quirc] qt5 sdl2 vcpkg-tool-ninja
-          cd ..
-          cmake "-DCMAKE_TOOLCHAIN_FILE=D:/a/fpv4win/fpv4win/vcpkg/scripts/buildsystems/vcpkg.cmake" -S ./ -B "build"
+          git submodule sync --recursive
+          git submodule update --init --recursive
+          if (-Not (Test-Path -Path vcpkg)) {
+            git clone --depth 1 https://github.com/microsoft/vcpkg.git vcpkg
+          }
+          .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          .\vcpkg\vcpkg.exe install libusb libpcap libsodium ffmpeg opencv4[quirc] qt5 sdl2 vcpkg-tool-ninja --triplet x64-windows
+          cmake "-DCMAKE_TOOLCHAIN_FILE=$env:GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" -S . -B build -A x64
           cmake --build build --config Release --target fpv4win
           cp gs.key build/Release/
           Invoke-WebRequest -Uri https://github.com/pbatard/libwdi/releases/download/v1.5.0/zadig-2.8.exe -OutFile build/Release/zadig-2.8.exe
