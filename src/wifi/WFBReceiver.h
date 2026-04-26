@@ -7,7 +7,6 @@
 #include "FrameParser.h"
 #include "Rtl8812aDevice.h"
 #include "WFBProcessor.h"
-#include <QUdpSocket>
 #include <atomic>
 #include <libusb.h>
 #include <memory>

@@ -39,12 +39,23 @@ list(FILTER SRC_LIST EXCLUDE REGEX ".*/3rd.*/src/main.cpp")
 include_directories(src 3rd/rtl8812au-monitor-pcap/src 3rd/rtl8812au-monitor-pcap/hal)
 add_executable(${PROJECT_NAME} ${SRC_LIST} qml.qrc)
 
+if (WIN32)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+            WIN32_LEAN_AND_MEAN
+            NOMINMAX
+            _WIN32_WINNT=0x0601)
+endif ()
+
 target_link_libraries(${PROJECT_NAME}
         Qt5::Quick ${FFMPEG_LIBRARIES}
         ${OpenCV_LIBS}
         ${SDL2_LIBRARIES}
         PkgConfig::LIBUSB
         unofficial-sodium::sodium)
+
+if (WIN32)
+    target_link_libraries(${PROJECT_NAME} ws2_32)
+endif ()
 
 if (WIN32 AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     set(DEBUG_SUFFIX)

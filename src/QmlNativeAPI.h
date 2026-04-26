@@ -4,15 +4,6 @@
 
 #ifndef CTRLCENTER_QMLNATIVEAPI_H
 #define CTRLCENTER_QMLNATIVEAPI_H
-#include "wifi/WFBReceiver.h"
-#include <QDir>
-#include <QFileInfo>
-#include <QJsonObject>
-#include <QObject>
-#include <QUdpSocket>
-#include <fstream>
-#include <thread>
-#include <util/mini.h>
 
 #ifdef _WIN32
 #  include <winsock2.h>
@@ -23,6 +14,15 @@
 #  include <arpa/inet.h>
 #  include <unistd.h>
 #endif
+
+#include "wifi/WFBReceiver.h"
+#include <QDir>
+#include <QFileInfo>
+#include <QJsonObject>
+#include <QObject>
+#include <fstream>
+#include <thread>
+#include <util/mini.h>
 
 using namespace toolkit;
 
