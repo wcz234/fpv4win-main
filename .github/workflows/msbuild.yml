@@ -9,6 +9,7 @@ on:
 env:
   SOLUTION_FILE_PATH: .
   BUILD_CONFIGURATION: Release
+  VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-binary-cache
 
 permissions:
   contents: read
@@ -23,23 +24,27 @@ jobs:
       - name: Add MSBuild to PATH
         uses: ilammy/msvc-dev-cmd@v1.4.1
 
-      - name: Set up cache for vcpkg/installed
+      - name: Set up vcpkg binary cache
         id: cache-vcpkg
         uses: actions/cache@v4
         with:
-          path: vcpkg/installed
-          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg/installed/**/*') }}
+          path: .vcpkg-binary-cache
+          key: ${{ runner.os }}-vcpkg-binary-${{ hashFiles('.github/workflows/msbuild.yml', 'CMakeLists.txt', '.gitmodules') }}
           restore-keys: |
-            ${{ runner.os }}-vcpkg-
+            ${{ runner.os }}-vcpkg-binary-
 
       - name: Build
         working-directory: ${{env.GITHUB_WORKSPACE}}
         run: |
           git submodule sync --recursive
           git submodule update --init --recursive
-          if (-Not (Test-Path -Path vcpkg)) {
+          if (-Not (Test-Path -Path vcpkg\.git)) {
+            if (Test-Path -Path vcpkg) {
+              Remove-Item -Recurse -Force vcpkg
+            }
             git clone --depth 1 https://github.com/microsoft/vcpkg.git vcpkg
           }
+          New-Item -ItemType Directory -Force -Path "$env:VCPKG_DEFAULT_BINARY_CACHE"
           .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
           .\vcpkg\vcpkg.exe install libusb libpcap libsodium ffmpeg opencv4[quirc] qt5 sdl2 vcpkg-tool-ninja --triplet x64-windows
           cmake "-DCMAKE_TOOLCHAIN_FILE=$env:GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" -S . -B build -A x64
