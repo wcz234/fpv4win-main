@@ -137,8 +137,7 @@ bool WFBReceiver::Start(const std::string &vidPid, uint8_t channel, int channelW
     char c;
     iss >> std::hex >> wifiDeviceVid >> c >> wifiDevicePid;
 
-    auto logger = std::make_shared<Logger>(
-        [](const std::string &level, const std::string &msg) { QmlNativeAPI::Instance().PutLog(level, msg); });
+    auto logger = std::make_shared<Logger>();
 
     rc = libusb_init(&ctx);
     if (rc < 0) {
