@@ -10,6 +10,7 @@ env:
   SOLUTION_FILE_PATH: .
   BUILD_CONFIGURATION: Release
   VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-binary-cache
+  VCPKG_COMMIT: d46283cf33cf5de7bd88e12156ce03882be1f179
 
 permissions:
   contents: read
@@ -24,16 +25,16 @@ jobs:
       - name: Add MSBuild to PATH
         uses: ilammy/msvc-dev-cmd@v1.4.1
 
-      - name: Set up vcpkg binary cache
+      - name: Restore vcpkg binary cache
         id: cache-vcpkg
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: .vcpkg-binary-cache
-          key: ${{ runner.os }}-vcpkg-binary-${{ hashFiles('.github/workflows/msbuild.yml', 'CMakeLists.txt', '.gitmodules') }}
+          key: ${{ runner.os }}-vcpkg-binary-${{ env.VCPKG_COMMIT }}-${{ hashFiles('CMakeLists.txt', '.gitmodules') }}
           restore-keys: |
-            ${{ runner.os }}-vcpkg-binary-
+            ${{ runner.os }}-vcpkg-binary-${{ env.VCPKG_COMMIT }}-
 
-      - name: Build
+      - name: Prepare vcpkg
         working-directory: ${{env.GITHUB_WORKSPACE}}
         run: |
           git submodule sync --recursive
@@ -44,9 +45,26 @@ jobs:
             }
             git clone --depth 1 https://github.com/microsoft/vcpkg.git vcpkg
           }
+          git -C vcpkg fetch --depth 1 origin $env:VCPKG_COMMIT
+          git -C vcpkg checkout $env:VCPKG_COMMIT
           New-Item -ItemType Directory -Force -Path "$env:VCPKG_DEFAULT_BINARY_CACHE"
           .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Install dependencies
+        working-directory: ${{env.GITHUB_WORKSPACE}}
+        run: |
           .\vcpkg\vcpkg.exe install libusb libpcap libsodium ffmpeg opencv4[quirc] qt5 sdl2 vcpkg-tool-ninja --triplet x64-windows
+
+      - name: Save vcpkg binary cache
+        if: always() && steps.cache-vcpkg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .vcpkg-binary-cache
+          key: ${{ runner.os }}-vcpkg-binary-${{ env.VCPKG_COMMIT }}-${{ hashFiles('CMakeLists.txt', '.gitmodules') }}
+
+      - name: Build
+        working-directory: ${{env.GITHUB_WORKSPACE}}
+        run: |
           cmake "-DCMAKE_TOOLCHAIN_FILE=$env:GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" -S . -B build -A x64
           cmake --build build --config Release --target fpv4win
           cp gs.key build/Release/
