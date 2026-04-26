@@ -54,6 +54,15 @@ ApplicationWindow {
             z:999
             tips:''
         }
+        Text {
+            z: 900
+            anchors.centerIn: parent
+            visible: player.videoFrameWidth <= 0 || player.videoFrameHeight <= 0
+            text: "Waiting for video stream"
+            color: "#d9ffffff"
+            font.pixelSize: 22
+            horizontalAlignment: Text.AlignHCenter
+        }
         Item {
             id: qrOverlay
             z: 950
@@ -621,7 +630,6 @@ ApplicationWindow {
 
                 ListView {
                     z:1
-                    anchors.top :logTitle.bottom
                     anchors.fill: parent
                     anchors.margins:5
                     model: ListModel {}

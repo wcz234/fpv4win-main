@@ -5,8 +5,8 @@ Rectangle{
     id:tipsBox
     visible: false
     color:"#bb333333"
-    width:childrenRect.width
-    height:childrenRect.height
+    width: Math.max(20, Math.min(tipText.implicitWidth + 20, parent ? parent.width - 40 : tipText.implicitWidth + 20))
+    height: tipText.implicitHeight + 20
     anchors.verticalCenter: parent.verticalCenter
     anchors.horizontalCenter: parent.horizontalCenter
     property string tips: ''
@@ -33,11 +33,14 @@ Rectangle{
         }
      }
     Text {
-        padding: 10
+        id: tipText
         anchors.verticalCenter: parent.verticalCenter
         anchors.horizontalCenter: parent.horizontalCenter
         text: tipsBox.tips
         font.pointSize: 16
         color: "#ffffff"
+        wrapMode: Text.Wrap
+        horizontalAlignment: Text.AlignHCenter
+        width: Math.max(0, tipsBox.width - 20)
     }
 }

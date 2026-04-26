@@ -16,7 +16,8 @@ Rectangle{
         visible: false
         padding: 5
         anchors.verticalCenter: parent.verticalCenter
-        anchors.right: time.left + 16
+        anchors.right: time.left
+        anchors.rightMargin: 4
         text: '<font color="#ff0000" >●</font>'
         font.pixelSize: 16
         Timer {
