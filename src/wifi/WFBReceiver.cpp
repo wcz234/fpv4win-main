@@ -2,6 +2,14 @@
 // Created by Talus on 2024/6/10.
 //
 
+#ifdef _WIN32
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#endif
+
 #include "WFBReceiver.h"
 #include "QmlNativeAPI.h"
 #include "RxFrame.h"
@@ -21,8 +29,6 @@
 
 // 跨平台 socket 抽象
 #ifdef _WIN32
-#  include <winsock2.h>
-#  include <ws2tcpip.h>
 using socket_t = SOCKET;
 #  define CLOSE_SOCKET(s) closesocket(s)
 #else

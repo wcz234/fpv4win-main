@@ -146,10 +146,7 @@ void GifEncoder::close() {
         // 写文件尾
         av_write_trailer(_formatCtx.get());
     }
-    if (_codecCtx) {
-        // 关闭编码器
-        avcodec_close(_codecCtx.get());
-    }
+    _codecCtx.reset();
     // 关闭文件
     if (_formatCtx && _formatCtx->pb) {
         avio_close(_formatCtx->pb);
