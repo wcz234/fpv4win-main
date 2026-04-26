@@ -5,13 +5,27 @@
 #ifndef FPV_WFB_RTP_H
 #define FPV_WFB_RTP_H
 
+#include <cstddef>
+#include <cstdint>
+#include <sstream>
+#include <string>
+
+#if defined(_WIN32)
+#  include <winsock2.h>
+#else
+#  include <arpa/inet.h>
+#endif
+
 #if defined(_WIN32)
 #pragma pack(push, 1)
+#define FPV_PACKED
+#else
+#define FPV_PACKED __attribute__((packed))
 #endif // defined(_WIN32)
 
 class RtpHeader {
 public:
-#if defined(__BYTE_ORDER) && __BYTE_ORDER == __BIG_ENDIAN || defined(_WIN32) && REG_DWORD == REG_DWORD_BIG_ENDIAN
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
     // 版本号，固定为2
     uint32_t version : 2;
     // padding
@@ -106,9 +120,9 @@ public:
         return *end;
     }
 
-    ssize_t getPayloadSize(size_t rtp_size) const {
+    std::ptrdiff_t getPayloadSize(size_t rtp_size) const {
         auto invalid_size = getPayloadOffset() + getPaddingSize(rtp_size);
-        return (ssize_t)rtp_size - invalid_size - 12;
+        return static_cast<std::ptrdiff_t>(rtp_size) - static_cast<std::ptrdiff_t>(invalid_size) - 12;
     }
 
     std::string dumpString(size_t rtp_size) const {
@@ -129,10 +143,12 @@ public:
     }
 
     ///////////////////////////////////////////////////////////////////////
-} PACKED;
+} FPV_PACKED;
 
 #if defined(_WIN32)
 #pragma pack(pop)
 #endif // defined(_WIN32)
+
+#undef FPV_PACKED
 
 #endif // FPV_WFB_RTP_H

@@ -10,6 +10,10 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <cstdint>
+#if defined(_WIN32) || defined(_WIN64)
+#include <stdlib.h>
+#endif
 #include <sodium.h>
 #include <sodium/crypto_box.h>
 #include <string>
@@ -90,7 +94,7 @@ static uint8_t ieee80211_header[] = {
     (IEEE80211_RADIOTAP_MCS_HAVE_MCS | IEEE80211_RADIOTAP_MCS_HAVE_BW | IEEE80211_RADIOTAP_MCS_HAVE_GI                 \
      | IEEE80211_RADIOTAP_MCS_HAVE_STBC | IEEE80211_RADIOTAP_MCS_HAVE_FEC)
 
-static uint8_t radiotap_header[] __attribute__((unused)) = {
+static uint8_t radiotap_header[] = {
     0x00,      0x00, // <-- radiotap version
     0x0d,      0x00, // <- radiotap header length
     0x00,      0x80, 0x08, 0x00, // <-- radiotap present flags:  RADIOTAP_TX_FLAGS + RADIOTAP_MCS

@@ -16,6 +16,9 @@
 
 #include "Rtp.h"
 
+#include <algorithm>
+#include <iostream>
+
 // 跨平台 socket 抽象
 #ifdef _WIN32
 #  include <winsock2.h>
@@ -291,7 +294,7 @@ void WFBReceiver::handleRtp(uint8_t *payload, uint16_t packet_size) {
     if (playing.compare_exchange_strong(expected, true)) {
         if (QmlNativeAPI::Instance().playerCodec == "AUTO") {
             uint8_t *nalu = header->getPayloadData();
-            ssize_t naluLen = header->getPayloadSize(packet_size);
+            auto naluLen = header->getPayloadSize(packet_size);
             if (naluLen < 0) naluLen = 0;
             bool h265 = looksLikeH265(nalu, static_cast<size_t>(naluLen));
             QmlNativeAPI::Instance().playerCodec = h265 ? "H265" : "H264";

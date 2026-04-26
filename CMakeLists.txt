@@ -28,13 +28,13 @@ endif()
 
 
 file(GLOB_RECURSE SRC_LIST
-        3rd/rtl8812au-monitor-pcap/*.c
-        3rd/rtl8812au-monitor-pcap/*.cpp
+        3rd/rtl8812au-monitor-pcap/hal/*.c
+        3rd/rtl8812au-monitor-pcap/src/*.c
+        3rd/rtl8812au-monitor-pcap/src/*.cpp
         src/*.cpp
         src/*.c
         src/*.h
 )
-list(FILTER SRC_LIST EXCLUDE REGEX ".*/3rd.*/src/main.cpp")
 
 include_directories(src 3rd/rtl8812au-monitor-pcap/src 3rd/rtl8812au-monitor-pcap/hal)
 add_executable(${PROJECT_NAME} ${SRC_LIST} qml.qrc)
