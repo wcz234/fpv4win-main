@@ -156,6 +156,7 @@ void QQuickRealTimePlayer::play(const QString &playUrl) {
     playStop = false;
     m_qrGeneration.fetch_add(1);
     m_lastQrScanAt.store(0);
+    m_lastQrHitAt.store(0);
     clearQrCodes();
 
     // 启动分析线程（不再 detach，stop() 中 join）
@@ -212,6 +213,7 @@ void QQuickRealTimePlayer::stop() {
     playStop = true;
     m_qrGeneration.fetch_add(1);
     m_lastQrScanAt.store(0);
+    m_lastQrHitAt.store(0);
 
     // 打断 avformat_read_frame 的阻塞
     if (decoder && decoder->pFormatCtx) {
@@ -275,6 +277,7 @@ void QQuickRealTimePlayer::setQrScanEnabled(bool enabled) {
     }
     m_qrGeneration.fetch_add(1);
     m_lastQrScanAt.store(0);
+    m_lastQrHitAt.store(0);
     if (!enabled) {
         clearQrCodes();
     }
@@ -302,10 +305,21 @@ void QQuickRealTimePlayer::scanQrCodes(const shared_ptr<AVFrame> &frame) {
     const auto codes = m_qrScanner->scan(frame);
     QMetaObject::invokeMethod(
         this,
-        [this, codes, generation]() {
+        [this, codes, generation, now]() {
             if (generation != m_qrGeneration.load()) {
                 return;
             }
+            if (!codes.isEmpty()) {
+                m_lastQrHitAt.store(now);
+                updateQrCodes(codes);
+                return;
+            }
+
+            const auto lastHitAt = m_lastQrHitAt.load();
+            if (lastHitAt != 0 && now < lastHitAt + QR_HOLD_MS) {
+                return;
+            }
+
             updateQrCodes(codes);
         },
         Qt::QueuedConnection);
