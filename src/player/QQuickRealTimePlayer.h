@@ -115,9 +115,7 @@ protected:
     std::atomic_bool m_qrScanEnabled = true;
     std::atomic_uint64_t m_qrGeneration = 0;
     std::atomic_uint64_t m_lastQrScanAt = 0;
-    std::atomic_uint64_t m_lastQrHitAt = 0;
     static constexpr uint64_t QR_SCAN_INTERVAL_MS = 200;
-    static constexpr uint64_t QR_HOLD_MS = 800;
     // 是否有声音
     bool hasAudio() {
         if (!decoder) {

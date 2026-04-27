@@ -11,7 +11,7 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 find_package(PkgConfig REQUIRED)
 
 find_package(FFmpeg REQUIRED)
-find_package(OpenCV REQUIRED COMPONENTS core objdetect imgproc)
+find_package(OpenCV REQUIRED COMPONENTS core objdetect)
 find_package(SDL2 REQUIRED)
 find_package(unofficial-sodium CONFIG REQUIRED)
 pkg_check_modules(LIBUSB REQUIRED IMPORTED_TARGET libusb-1.0)
