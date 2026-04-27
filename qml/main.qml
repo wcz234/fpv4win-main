@@ -87,41 +87,51 @@ ApplicationWindow {
                 delegate: Item {
                     id: qrItem
                     readonly property var viewport: qrOverlay.videoViewport()
+                    readonly property var qrPoints: modelData.points || []
                     x: viewport.x + (modelData.x || 0) * viewport.width
                     y: viewport.y + (modelData.y || 0) * viewport.height
                     width: (modelData.width || 0) * viewport.width
                     height: (modelData.height || 0) * viewport.height
 
-                    Rectangle {
+                    Canvas {
+                        id: qrFrame
                         anchors.fill: parent
-                        radius: 6
-                        color: "transparent"
-                        border.color: "#1cff97"
-                        border.width: 2
+                        antialiasing: true
+
+                        onPaint: {
+                            const ctx = getContext("2d");
+                            ctx.clearRect(0, 0, width, height);
+                            ctx.strokeStyle = "#1cff2f";
+                            ctx.lineWidth = 4;
+                            ctx.lineJoin = "round";
+                            ctx.lineCap = "round";
+                            ctx.beginPath();
+
+                            if (qrItem.qrPoints.length >= 4) {
+                                ctx.moveTo(qrItem.qrPoints[0].x * width, qrItem.qrPoints[0].y * height);
+                                for (let i = 1; i < 4; ++i) {
+                                    ctx.lineTo(qrItem.qrPoints[i].x * width, qrItem.qrPoints[i].y * height);
+                                }
+                                ctx.closePath();
+                            } else {
+                                ctx.rect(2, 2, Math.max(0, width - 4), Math.max(0, height - 4));
+                            }
+
+                            ctx.stroke();
+                        }
+
+                        Component.onCompleted: requestPaint()
+                        onWidthChanged: requestPaint()
+                        onHeightChanged: requestPaint()
                     }
 
-                    Rectangle {
-                        id: qrLabel
-                        visible: qrText.text !== ""
-                        y: Math.max(-implicitHeight - 8, -qrItem.y)
-                        x: Math.min(Math.max(0, (qrItem.width - width) / 2), qrOverlay.width - qrItem.x - width)
-                        width: Math.min(qrOverlay.width - qrItem.x, qrText.implicitWidth + 16)
-                        implicitHeight: qrText.implicitHeight + 10
-                        radius: 5
-                        color: "#d9202b26"
-                        border.color: "#1cff97"
-                        border.width: 1
-
-                        Text {
-                            id: qrText
-                            anchors.fill: parent
-                            anchors.margins: 5
-                            text: modelData.text || ""
-                            font.pixelSize: 12
-                            color: "#ffffff"
-                            elide: Text.ElideRight
-                            verticalAlignment: Text.AlignVCenter
-                        }
+                    Text {
+                        x: 0
+                        y: Math.max(-32, -qrItem.y)
+                        text: index + 1
+                        color: "#1cff2f"
+                        font.pixelSize: 28
+                        font.bold: true
                     }
                 }
             }

@@ -98,12 +98,28 @@ QVariantList QrCodeScanner::scan(const std::shared_ptr<AVFrame> &frame) {
         minY = std::clamp(minY, 0.0f, static_cast<float>(frame->height));
         maxY = std::clamp(maxY, 0.0f, static_cast<float>(frame->height));
 
+        const auto qrWidth = std::max(0.0f, maxX - minX);
+        const auto qrHeight = std::max(0.0f, maxY - minY);
+        QVariantList points;
+        if (qrWidth > 0.0f && qrHeight > 0.0f) {
+            for (int i = 0; i < 4; ++i) {
+                const auto pointX = std::clamp(qrPoints[i * 2], 0.0f, static_cast<float>(frame->width));
+                const auto pointY = std::clamp(qrPoints[i * 2 + 1], 0.0f, static_cast<float>(frame->height));
+
+                QVariantMap point;
+                point.insert("x", (pointX - minX) / qrWidth);
+                point.insert("y", (pointY - minY) / qrHeight);
+                points.push_back(point);
+            }
+        }
+
         QVariantMap qrItem;
         qrItem.insert("text", text);
         qrItem.insert("x", minX / static_cast<float>(frame->width));
         qrItem.insert("y", minY / static_cast<float>(frame->height));
-        qrItem.insert("width", std::max(0.0f, maxX - minX) / static_cast<float>(frame->width));
-        qrItem.insert("height", std::max(0.0f, maxY - minY) / static_cast<float>(frame->height));
+        qrItem.insert("width", qrWidth / static_cast<float>(frame->width));
+        qrItem.insert("height", qrHeight / static_cast<float>(frame->height));
+        qrItem.insert("points", points);
         results.push_back(qrItem);
     }
 
