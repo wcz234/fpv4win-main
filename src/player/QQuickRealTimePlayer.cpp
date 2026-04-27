@@ -3,13 +3,32 @@
 #include "JpegEncoder.h"
 #include "QrCodeScanner.h"
 #include <QDir>
+#include <QDebug>
 #include <QMetaObject>
 #include <QOpenGLFramebufferObject>
 #include <QQuickWindow>
 #include <QStandardPaths>
+#include <QVariantMap>
 #include <SDL2/SDL.h>
 #include <future>
 #include <sstream>
+
+namespace {
+
+void printQrCodes(const QVariantList &codes) {
+    for (int i = 0; i < codes.size(); ++i) {
+        const auto qrItem = codes.at(i).toMap();
+        const auto text = qrItem.value("text").toString();
+        if (text.isEmpty()) {
+            continue;
+        }
+
+        qInfo().noquote() << QStringLiteral("QR[%1]: %2").arg(i).arg(text);
+    }
+}
+
+} // namespace
+
 // GIF默认帧率
 #define DEFAULT_GIF_FRAMERATE 10
 
@@ -300,6 +319,7 @@ void QQuickRealTimePlayer::updateQrCodes(const QVariantList &codes) {
         }
         m_qrCodes = codes;
     }
+    printQrCodes(codes);
     emit onQrCodesChanged();
 }
 
