@@ -5,8 +5,10 @@
 #include <QQuickItem>
 #include <QVariantList>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <queue>
 #include <thread>
 
@@ -110,6 +112,13 @@ protected:
     // GIF录制器
     shared_ptr<GifEncoder> _gifEncoder;
     unique_ptr<QrCodeScanner> m_qrScanner;
+    std::thread qrScanThread;
+    std::mutex m_qrFrameMtx;
+    std::condition_variable m_qrFrameCv;
+    shared_ptr<AVFrame> m_qrPendingFrame;
+    uint64_t m_qrPendingGeneration = 0;
+    uint64_t m_qrPendingAt = 0;
+    std::atomic_bool m_qrThreadStop = false;
     QVariantList m_qrCodes;
     mutable mutex m_qrCodesMtx;
     std::atomic_bool m_qrScanEnabled = true;
@@ -125,7 +134,10 @@ protected:
         }
         return decoder->HasAudio();
     }
-    void scanQrCodes(const shared_ptr<AVFrame> &frame);
+    void startQrScanThread();
+    void stopQrScanThread();
+    void enqueueQrScanFrame(const shared_ptr<AVFrame> &frame);
+    void scanQrCodes(const shared_ptr<AVFrame> &frame, uint64_t generation, uint64_t queuedAt);
     void updateQrCodes(const QVariantList &codes);
     void clearQrCodes();
 

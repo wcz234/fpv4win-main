@@ -91,6 +91,7 @@ QQuickRealTimePlayer::QQuickRealTimePlayer(QQuickItem *parent)
     : QQuickFramebufferObject(parent)
     , m_qrScanner(std::make_unique<QrCodeScanner>()) {
     SDL_Init(SDL_INIT_AUDIO);
+    startQrScanThread();
     // FIX: 注释和代码不一致；按 60fps 刷新 UI 足够
     startTimer(1000 / 60);
 }
@@ -198,7 +199,7 @@ void QQuickRealTimePlayer::play(const QString &playUrl) {
                     }
                     videoFrameQueue.push(frame);
                 }
-                scanQrCodes(frame);
+                enqueueQrScanFrame(frame);
             } catch (const exception &e) {
                 emit onError(e.what(), -2);
                 break;
@@ -214,6 +215,12 @@ void QQuickRealTimePlayer::stop() {
     m_qrGeneration.fetch_add(1);
     m_lastQrScanAt.store(0);
     m_lastQrHitAt.store(0);
+    {
+        lock_guard<mutex> lck(m_qrFrameMtx);
+        m_qrPendingFrame.reset();
+        m_qrPendingGeneration = 0;
+        m_qrPendingAt = 0;
+    }
 
     // 打断 avformat_read_frame 的阻塞
     if (decoder && decoder->pFormatCtx) {
@@ -279,6 +286,12 @@ void QQuickRealTimePlayer::setQrScanEnabled(bool enabled) {
     m_lastQrScanAt.store(0);
     m_lastQrHitAt.store(0);
     if (!enabled) {
+        {
+            lock_guard<mutex> lck(m_qrFrameMtx);
+            m_qrPendingFrame.reset();
+            m_qrPendingGeneration = 0;
+            m_qrPendingAt = 0;
+        }
         clearQrCodes();
     }
     emit onQrScanEnabledChanged(enabled);
@@ -286,14 +299,55 @@ void QQuickRealTimePlayer::setQrScanEnabled(bool enabled) {
 
 QQuickRealTimePlayer::~QQuickRealTimePlayer() {
     stop();
+    stopQrScanThread();
 }
 
-void QQuickRealTimePlayer::scanQrCodes(const shared_ptr<AVFrame> &frame) {
+void QQuickRealTimePlayer::startQrScanThread() {
+    if (qrScanThread.joinable()) {
+        return;
+    }
+    m_qrThreadStop.store(false);
+    qrScanThread = std::thread([this]() {
+        while (!m_qrThreadStop.load()) {
+            shared_ptr<AVFrame> frame;
+            uint64_t generation = 0;
+            uint64_t queuedAt = 0;
+            {
+                std::unique_lock<std::mutex> lck(m_qrFrameMtx);
+                m_qrFrameCv.wait(lck, [this]() {
+                    return m_qrThreadStop.load() || m_qrPendingFrame;
+                });
+                if (m_qrThreadStop.load()) {
+                    return;
+                }
+                frame = m_qrPendingFrame;
+                generation = m_qrPendingGeneration;
+                queuedAt = m_qrPendingAt;
+                m_qrPendingFrame.reset();
+                m_qrPendingGeneration = 0;
+                m_qrPendingAt = 0;
+            }
+            scanQrCodes(frame, generation, queuedAt);
+        }
+    });
+}
+
+void QQuickRealTimePlayer::stopQrScanThread() {
+    m_qrThreadStop.store(true);
+    {
+        lock_guard<mutex> lck(m_qrFrameMtx);
+        m_qrPendingFrame.reset();
+    }
+    m_qrFrameCv.notify_all();
+    if (qrScanThread.joinable()) {
+        qrScanThread.join();
+    }
+}
+
+void QQuickRealTimePlayer::enqueueQrScanFrame(const shared_ptr<AVFrame> &frame) {
     if (!(m_qrScanner && m_qrScanEnabled.load())) {
         return;
     }
-
-    const auto generation = m_qrGeneration.load();
     const auto now = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
             .count());
@@ -302,21 +356,35 @@ void QQuickRealTimePlayer::scanQrCodes(const shared_ptr<AVFrame> &frame) {
     }
     m_lastQrScanAt.store(now);
 
+    {
+        lock_guard<mutex> lck(m_qrFrameMtx);
+        m_qrPendingFrame = frame;
+        m_qrPendingGeneration = m_qrGeneration.load();
+        m_qrPendingAt = now;
+    }
+    m_qrFrameCv.notify_one();
+}
+
+void QQuickRealTimePlayer::scanQrCodes(const shared_ptr<AVFrame> &frame, uint64_t generation, uint64_t queuedAt) {
+    if (!(frame && m_qrScanner && m_qrScanEnabled.load())) {
+        return;
+    }
+
     const auto codes = m_qrScanner->scan(frame);
     QMetaObject::invokeMethod(
         this,
-        [this, codes, generation, now]() {
+        [this, codes, generation, queuedAt]() {
             if (generation != m_qrGeneration.load()) {
                 return;
             }
             if (!codes.isEmpty()) {
-                m_lastQrHitAt.store(now);
+                m_lastQrHitAt.store(queuedAt);
                 updateQrCodes(codes);
                 return;
             }
 
             const auto lastHitAt = m_lastQrHitAt.load();
-            if (lastHitAt != 0 && now < lastHitAt + QR_HOLD_MS) {
+            if (lastHitAt != 0 && queuedAt < lastHitAt + QR_HOLD_MS) {
                 return;
             }
 
