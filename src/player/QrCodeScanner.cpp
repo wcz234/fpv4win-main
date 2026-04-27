@@ -5,12 +5,38 @@
 
 #include <QVariantMap>
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace {
 
 constexpr int kValuesPerQr = 8;
 constexpr int kMaxResults = 12;
+
+bool isDuplicateResult(const QVariantList &results, const QString &text, float minX, float minY, float width, float height) {
+    const float cx = minX + width * 0.5f;
+    const float cy = minY + height * 0.5f;
+
+    for (const auto &item : results) {
+        const auto map = item.toMap();
+        if (!text.isEmpty() && map.value("text").toString() == text) {
+            return true;
+        }
+
+        const float oldX = map.value("x").toFloat();
+        const float oldY = map.value("y").toFloat();
+        const float oldW = map.value("width").toFloat();
+        const float oldH = map.value("height").toFloat();
+        const float oldCx = oldX + oldW * 0.5f;
+        const float oldCy = oldY + oldH * 0.5f;
+        const float centerDistance = std::hypot(cx - oldCx, cy - oldCy);
+        if (centerDistance < 0.025f && std::abs(width - oldW) < 0.06f && std::abs(height - oldH) < 0.06f) {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 int appendDecodedResults(
     QVariantList &results,
@@ -72,6 +98,14 @@ int appendDecodedResults(
             continue;
         }
 
+        const auto normalizedX = minX / static_cast<float>(sourceWidth);
+        const auto normalizedY = minY / static_cast<float>(sourceHeight);
+        const auto normalizedW = qrWidth / static_cast<float>(sourceWidth);
+        const auto normalizedH = qrHeight / static_cast<float>(sourceHeight);
+        if (isDuplicateResult(results, text, normalizedX, normalizedY, normalizedW, normalizedH)) {
+            continue;
+        }
+
         QVariantList normalizedPoints;
         for (int i = 0; i < 4; ++i) {
             QVariantMap point;
@@ -82,10 +116,10 @@ int appendDecodedResults(
 
         QVariantMap qrItem;
         qrItem.insert("text", text);
-        qrItem.insert("x", minX / static_cast<float>(sourceWidth));
-        qrItem.insert("y", minY / static_cast<float>(sourceHeight));
-        qrItem.insert("width", qrWidth / static_cast<float>(sourceWidth));
-        qrItem.insert("height", qrHeight / static_cast<float>(sourceHeight));
+        qrItem.insert("x", normalizedX);
+        qrItem.insert("y", normalizedY);
+        qrItem.insert("width", normalizedW);
+        qrItem.insert("height", normalizedH);
         qrItem.insert("points", normalizedPoints);
         results.push_back(qrItem);
         ++added;
@@ -99,6 +133,14 @@ int detectQrCodes(cv::QRCodeDetector &detector, const cv::Mat &image, int source
     cv::Mat points;
     if (detector.detectAndDecodeMulti(image, decodedInfo, points)) {
         appendDecodedResults(results, decodedInfo, points, sourceWidth, sourceHeight);
+    }
+
+    points.release();
+    if (detector.detectMulti(image, points) && !points.empty()) {
+        decodedInfo.clear();
+        if (detector.decodeMulti(image, points, decodedInfo)) {
+            appendDecodedResults(results, decodedInfo, points, sourceWidth, sourceHeight);
+        }
     }
 
     if (results.isEmpty()) {
