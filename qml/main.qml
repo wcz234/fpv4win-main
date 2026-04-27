@@ -125,13 +125,31 @@ ApplicationWindow {
                         onHeightChanged: requestPaint()
                     }
 
-                    Text {
+                    Rectangle {
+                        id: qrLabel
                         x: 0
-                        y: Math.max(-32, -qrItem.y)
-                        text: index + 1
-                        color: "#1cff2f"
-                        font.pixelSize: 28
-                        font.bold: true
+                        y: qrItem.y > 34 ? -34 : Math.min(qrItem.height + 4, qrOverlay.height - qrItem.y - height)
+                        width: Math.min(qrOverlay.width - qrItem.x, Math.max(48, qrText.implicitWidth + 14))
+                        height: Math.max(28, qrText.implicitHeight + 8)
+                        radius: 4
+                        color: "#cc063b16"
+                        border.color: "#1cff2f"
+                        border.width: 1
+
+                        Text {
+                            id: qrText
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.leftMargin: 7
+                            anchors.rightMargin: 7
+                            text: (index + 1) + ": " + (modelData.text || "")
+                            color: "#ffffff"
+                            font.pixelSize: 16
+                            font.bold: true
+                            elide: Text.ElideRight
+                            horizontalAlignment: Text.AlignLeft
+                        }
                     }
                 }
             }
@@ -270,7 +288,7 @@ ApplicationWindow {
                         horizontalAlignment: Text.Center
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.horizontalCenter: parent.horizontalCenter
-                        text: player.qrScanEnabled ? "QR ON" : "QR OFF"
+                        text: player.qrScanEnabled ? ("QR " + player.qrCodes.length) : "QR OFF"
                         font.pixelSize: 12
                         color: "#ffffff"
                     }
