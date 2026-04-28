@@ -10,10 +10,21 @@
 #include <QStandardPaths>
 #include <QVariantMap>
 #include <SDL2/SDL.h>
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cmath>
 #include <future>
 #include <sstream>
 
 namespace {
+
+struct QrScanRegion {
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+};
 
 void printQrCodes(const QVariantList &codes) {
     for (int i = 0; i < codes.size(); ++i) {
@@ -25,6 +36,82 @@ void printQrCodes(const QVariantList &codes) {
 
         qInfo().noquote() << QStringLiteral("QR[%1]: %2").arg(i).arg(text);
     }
+}
+
+QrScanRegion makeQrScanRegion(const AVFrame &frame, size_t workerIndex) {
+    const int halfWidth = frame.width / 2;
+    const int halfHeight = frame.height / 2;
+    const int overlapX = std::max(24, frame.width / 12);
+    const int overlapY = std::max(24, frame.height / 12);
+
+    const bool rightSide = (workerIndex % 2) == 1;
+    const bool bottomSide = workerIndex >= 2;
+
+    const int left = rightSide ? std::max(0, halfWidth - overlapX) : 0;
+    const int top = bottomSide ? std::max(0, halfHeight - overlapY) : 0;
+    const int right = rightSide ? frame.width : std::min(frame.width, halfWidth + overlapX);
+    const int bottom = bottomSide ? frame.height : std::min(frame.height, halfHeight + overlapY);
+
+    return { left, top, right - left, bottom - top };
+}
+
+float qrIoU(const QVariantMap &a, const QVariantMap &b) {
+    const float ax1 = a.value("x").toFloat();
+    const float ay1 = a.value("y").toFloat();
+    const float ax2 = ax1 + a.value("width").toFloat();
+    const float ay2 = ay1 + a.value("height").toFloat();
+    const float bx1 = b.value("x").toFloat();
+    const float by1 = b.value("y").toFloat();
+    const float bx2 = bx1 + b.value("width").toFloat();
+    const float by2 = by1 + b.value("height").toFloat();
+
+    const float ix1 = std::max(ax1, bx1);
+    const float iy1 = std::max(ay1, by1);
+    const float ix2 = std::min(ax2, bx2);
+    const float iy2 = std::min(ay2, by2);
+    const float intersection = std::max(0.0f, ix2 - ix1) * std::max(0.0f, iy2 - iy1);
+    const float areaA = std::max(0.0f, ax2 - ax1) * std::max(0.0f, ay2 - ay1);
+    const float areaB = std::max(0.0f, bx2 - bx1) * std::max(0.0f, by2 - by1);
+    const float unionArea = areaA + areaB - intersection;
+    return unionArea > 0.0f ? intersection / unionArea : 0.0f;
+}
+
+bool isSameQrPosition(const QVariantMap &a, const QVariantMap &b) {
+    if (qrIoU(a, b) > 0.55f) {
+        return true;
+    }
+
+    const float ax = a.value("x").toFloat();
+    const float ay = a.value("y").toFloat();
+    const float aw = a.value("width").toFloat();
+    const float ah = a.value("height").toFloat();
+    const float bx = b.value("x").toFloat();
+    const float by = b.value("y").toFloat();
+    const float bw = b.value("width").toFloat();
+    const float bh = b.value("height").toFloat();
+    const float centerDistance = std::hypot((ax + aw * 0.5f) - (bx + bw * 0.5f), (ay + ah * 0.5f) - (by + bh * 0.5f));
+    return centerDistance < 0.025f && std::abs(aw - bw) < 0.06f && std::abs(ah - bh) < 0.06f;
+}
+
+template <size_t WorkerCount>
+QVariantList mergeQrCodeResults(const std::array<QVariantList, WorkerCount> &workerResults) {
+    QVariantList merged;
+    for (const auto &results : workerResults) {
+        for (const auto &item : results) {
+            const auto candidate = item.toMap();
+            bool duplicate = false;
+            for (const auto &existingItem : merged) {
+                if (isSameQrPosition(existingItem.toMap(), candidate)) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) {
+                merged.push_back(item);
+            }
+        }
+    }
+    return merged;
 }
 
 } // namespace
@@ -88,8 +175,7 @@ void TItemRender::synchronize(QQuickFramebufferObject *item) {
 
 //************QQuickRealTimePlayer************//
 QQuickRealTimePlayer::QQuickRealTimePlayer(QQuickItem *parent)
-    : QQuickFramebufferObject(parent)
-    , m_qrScanner(std::make_unique<QrCodeScanner>()) {
+    : QQuickFramebufferObject(parent) {
     SDL_Init(SDL_INIT_AUDIO);
     startQrScanThread();
     // FIX: 注释和代码不一致；按 60fps 刷新 UI 足够
@@ -220,6 +306,8 @@ void QQuickRealTimePlayer::stop() {
         m_qrPendingFrame.reset();
         m_qrPendingGeneration = 0;
         m_qrPendingAt = 0;
+        ++m_qrFrameSequence;
+        std::fill(m_qrWorkerResultSequences.begin(), m_qrWorkerResultSequences.end(), 0);
     }
 
     // 打断 avformat_read_frame 的阻塞
@@ -291,6 +379,8 @@ void QQuickRealTimePlayer::setQrScanEnabled(bool enabled) {
             m_qrPendingFrame.reset();
             m_qrPendingGeneration = 0;
             m_qrPendingAt = 0;
+            ++m_qrFrameSequence;
+            std::fill(m_qrWorkerResultSequences.begin(), m_qrWorkerResultSequences.end(), 0);
         }
         clearQrCodes();
     }
@@ -303,33 +393,44 @@ QQuickRealTimePlayer::~QQuickRealTimePlayer() {
 }
 
 void QQuickRealTimePlayer::startQrScanThread() {
-    if (qrScanThread.joinable()) {
+    if (std::any_of(qrScanThreads.begin(), qrScanThreads.end(), [](const std::thread &thread) {
+            return thread.joinable();
+        })) {
         return;
     }
     m_qrThreadStop.store(false);
-    qrScanThread = std::thread([this]() {
-        while (!m_qrThreadStop.load()) {
-            shared_ptr<AVFrame> frame;
-            uint64_t generation = 0;
-            uint64_t queuedAt = 0;
-            {
-                std::unique_lock<std::mutex> lck(m_qrFrameMtx);
-                m_qrFrameCv.wait(lck, [this]() {
-                    return m_qrThreadStop.load() || m_qrPendingFrame;
-                });
-                if (m_qrThreadStop.load()) {
-                    return;
+    {
+        lock_guard<mutex> lck(m_qrFrameMtx);
+        std::fill(m_qrWorkerResultSequences.begin(), m_qrWorkerResultSequences.end(), 0);
+    }
+
+    for (size_t workerIndex = 0; workerIndex < QR_SCAN_WORKER_COUNT; ++workerIndex) {
+        qrScanThreads[workerIndex] = std::thread([this, workerIndex]() {
+            QrCodeScanner scanner;
+            uint64_t lastSequence = 0;
+            while (!m_qrThreadStop.load()) {
+                shared_ptr<AVFrame> frame;
+                uint64_t generation = 0;
+                uint64_t queuedAt = 0;
+                uint64_t sequence = 0;
+                {
+                    std::unique_lock<std::mutex> lck(m_qrFrameMtx);
+                    m_qrFrameCv.wait(lck, [this, &lastSequence]() {
+                        return m_qrThreadStop.load() || (m_qrPendingFrame && m_qrFrameSequence != lastSequence);
+                    });
+                    if (m_qrThreadStop.load()) {
+                        return;
+                    }
+                    frame = m_qrPendingFrame;
+                    generation = m_qrPendingGeneration;
+                    queuedAt = m_qrPendingAt;
+                    sequence = m_qrFrameSequence;
+                    lastSequence = sequence;
                 }
-                frame = m_qrPendingFrame;
-                generation = m_qrPendingGeneration;
-                queuedAt = m_qrPendingAt;
-                m_qrPendingFrame.reset();
-                m_qrPendingGeneration = 0;
-                m_qrPendingAt = 0;
+                scanQrCodes(workerIndex, scanner, frame, generation, queuedAt, sequence);
             }
-            scanQrCodes(frame, generation, queuedAt);
-        }
-    });
+        });
+    }
 }
 
 void QQuickRealTimePlayer::stopQrScanThread() {
@@ -337,15 +438,18 @@ void QQuickRealTimePlayer::stopQrScanThread() {
     {
         lock_guard<mutex> lck(m_qrFrameMtx);
         m_qrPendingFrame.reset();
+        ++m_qrFrameSequence;
     }
     m_qrFrameCv.notify_all();
-    if (qrScanThread.joinable()) {
-        qrScanThread.join();
+    for (auto &thread : qrScanThreads) {
+        if (thread.joinable()) {
+            thread.join();
+        }
     }
 }
 
 void QQuickRealTimePlayer::enqueueQrScanFrame(const shared_ptr<AVFrame> &frame) {
-    if (!(m_qrScanner && m_qrScanEnabled.load())) {
+    if (!(frame && m_qrScanEnabled.load())) {
         return;
     }
     const auto now = static_cast<uint64_t>(
@@ -361,21 +465,53 @@ void QQuickRealTimePlayer::enqueueQrScanFrame(const shared_ptr<AVFrame> &frame) 
         m_qrPendingFrame = frame;
         m_qrPendingGeneration = m_qrGeneration.load();
         m_qrPendingAt = now;
+        ++m_qrFrameSequence;
+        std::fill(m_qrWorkerResultSequences.begin(), m_qrWorkerResultSequences.end(), 0);
     }
-    m_qrFrameCv.notify_one();
+    m_qrFrameCv.notify_all();
 }
 
-void QQuickRealTimePlayer::scanQrCodes(const shared_ptr<AVFrame> &frame, uint64_t generation, uint64_t queuedAt) {
-    if (!(frame && m_qrScanner && m_qrScanEnabled.load())) {
+void QQuickRealTimePlayer::scanQrCodes(
+    size_t workerIndex, QrCodeScanner &scanner, const shared_ptr<AVFrame> &frame, uint64_t generation,
+    uint64_t queuedAt, uint64_t sequence) {
+    if (!(frame && m_qrScanEnabled.load())) {
         return;
     }
 
-    const auto codes = m_qrScanner->scan(frame);
+    const auto region = makeQrScanRegion(*frame, workerIndex);
+    const auto codes = scanner.scanRegion(frame, region.x, region.y, region.width, region.height);
+    QVariantList mergedCodes;
+    bool ready = false;
+    {
+        lock_guard<mutex> lck(m_qrFrameMtx);
+        if (sequence != m_qrFrameSequence) {
+            return;
+        }
+
+        m_qrWorkerResults[workerIndex] = codes;
+        m_qrWorkerResultSequences[workerIndex] = sequence;
+        ready = std::all_of(
+            m_qrWorkerResultSequences.begin(), m_qrWorkerResultSequences.end(),
+            [sequence](uint64_t value) { return value == sequence; });
+        if (ready) {
+            mergedCodes = mergeQrCodeResults(m_qrWorkerResults);
+        }
+    }
+    if (!ready) {
+        return;
+    }
+
     QMetaObject::invokeMethod(
         this,
-        [this, codes, generation, queuedAt]() {
+        [this, codes = mergedCodes, generation, queuedAt, sequence]() {
             if (generation != m_qrGeneration.load()) {
                 return;
+            }
+            {
+                lock_guard<mutex> lck(m_qrFrameMtx);
+                if (sequence != m_qrFrameSequence) {
+                    return;
+                }
             }
             if (!codes.isEmpty()) {
                 m_lastQrHitAt.store(queuedAt);

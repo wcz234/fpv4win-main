@@ -13,16 +13,12 @@ namespace {
 constexpr int kValuesPerQr = 8;
 constexpr int kMaxResults = 12;
 
-bool isDuplicateResult(const QVariantList &results, const QString &text, float minX, float minY, float width, float height) {
+bool isDuplicateResult(const QVariantList &results, float minX, float minY, float width, float height) {
     const float centerX = minX + width * 0.5f;
     const float centerY = minY + height * 0.5f;
 
     for (const auto &item : results) {
         const auto map = item.toMap();
-        if (!text.isEmpty() && map.value("text").toString() == text) {
-            return true;
-        }
-
         const float oldX = map.value("x").toFloat();
         const float oldY = map.value("y").toFloat();
         const float oldW = map.value("width").toFloat();
@@ -43,7 +39,9 @@ int appendDecodedResults(
     const std::vector<cv::String> &decodedInfo,
     const cv::Mat &points,
     int sourceWidth,
-    int sourceHeight) {
+    int sourceHeight,
+    int offsetX,
+    int offsetY) {
     if (decodedInfo.empty() || points.empty() || results.size() >= kMaxResults) {
         return 0;
     }
@@ -76,9 +74,11 @@ int appendDecodedResults(
         float mappedPoints[kValuesPerQr] {};
         for (int i = 0; i < 4; ++i) {
             mappedPoints[i * 2] = std::clamp(
-                rawPoints[index * kValuesPerQr + i * 2], 0.0f, static_cast<float>(sourceWidth));
+                rawPoints[index * kValuesPerQr + i * 2] + static_cast<float>(offsetX), 0.0f,
+                static_cast<float>(sourceWidth));
             mappedPoints[i * 2 + 1] = std::clamp(
-                rawPoints[index * kValuesPerQr + i * 2 + 1], 0.0f, static_cast<float>(sourceHeight));
+                rawPoints[index * kValuesPerQr + i * 2 + 1] + static_cast<float>(offsetY), 0.0f,
+                static_cast<float>(sourceHeight));
         }
 
         float minX = mappedPoints[0];
@@ -102,7 +102,7 @@ int appendDecodedResults(
         const float normalizedY = minY / static_cast<float>(sourceHeight);
         const float normalizedW = qrWidth / static_cast<float>(sourceWidth);
         const float normalizedH = qrHeight / static_cast<float>(sourceHeight);
-        if (isDuplicateResult(results, text, normalizedX, normalizedY, normalizedW, normalizedH)) {
+        if (isDuplicateResult(results, normalizedX, normalizedY, normalizedW, normalizedH)) {
             continue;
         }
 
@@ -128,11 +128,24 @@ int appendDecodedResults(
     return added;
 }
 
-int detectQrCodes(cv::QRCodeDetector &detector, const cv::Mat &image, int sourceWidth, int sourceHeight, QVariantList &results) {
+int detectQrCodes(
+    cv::QRCodeDetector &detector,
+    const cv::Mat &image,
+    int sourceWidth,
+    int sourceHeight,
+    int offsetX,
+    int offsetY,
+    QVariantList &results) {
     std::vector<cv::String> decodedInfo;
     cv::Mat points;
     if (detector.detectAndDecodeMulti(image, decodedInfo, points)) {
-        appendDecodedResults(results, decodedInfo, points, sourceWidth, sourceHeight);
+        appendDecodedResults(results, decodedInfo, points, sourceWidth, sourceHeight, offsetX, offsetY);
+    }
+
+    decodedInfo.clear();
+    points.release();
+    if (detector.detectMulti(image, points) && detector.decodeMulti(image, points, decodedInfo)) {
+        appendDecodedResults(results, decodedInfo, points, sourceWidth, sourceHeight, offsetX, offsetY);
     }
 
     decodedInfo.clear();
@@ -140,7 +153,7 @@ int detectQrCodes(cv::QRCodeDetector &detector, const cv::Mat &image, int source
     const auto text = detector.detectAndDecode(image, points);
     if (!text.empty() && !points.empty()) {
         decodedInfo.push_back(text);
-        appendDecodedResults(results, decodedInfo, points, sourceWidth, sourceHeight);
+        appendDecodedResults(results, decodedInfo, points, sourceWidth, sourceHeight, offsetX, offsetY);
     }
 
     return results.size();
@@ -166,8 +179,26 @@ QrCodeScanner::~QrCodeScanner() {
 }
 
 QVariantList QrCodeScanner::scan(const std::shared_ptr<AVFrame> &frame) {
+    if (!(frame && frame->data[0])) {
+        return {};
+    }
+
+    return scanRegion(frame, 0, 0, frame->width, frame->height);
+}
+
+QVariantList QrCodeScanner::scanRegion(const std::shared_ptr<AVFrame> &frame, int x, int y, int width, int height) {
     QVariantList results;
     if (!(frame && frame->data[0] && frame->width > 0 && frame->height > 0)) {
+        return results;
+    }
+
+    const int left = std::clamp(x, 0, frame->width);
+    const int top = std::clamp(y, 0, frame->height);
+    const int right = std::clamp(x + width, left, frame->width);
+    const int bottom = std::clamp(y + height, top, frame->height);
+    const int regionWidth = right - left;
+    const int regionHeight = bottom - top;
+    if (regionWidth <= 0 || regionHeight <= 0) {
         return results;
     }
 
@@ -189,7 +220,8 @@ QVariantList QrCodeScanner::scan(const std::shared_ptr<AVFrame> &frame) {
     }
 
     cv::Mat gray(frame->height, frame->width, CV_8UC1, impl.grayBuffer.data(), stride);
-    detectQrCodes(impl.detector, gray, frame->width, frame->height, results);
+    const cv::Rect roi(left, top, regionWidth, regionHeight);
+    detectQrCodes(impl.detector, gray(roi), frame->width, frame->height, left, top, results);
 
     return results;
 }

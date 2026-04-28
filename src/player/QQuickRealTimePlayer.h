@@ -4,8 +4,10 @@
 #include <QQuickFramebufferObject>
 #include <QQuickItem>
 #include <QVariantList>
+#include <array>
 #include <atomic>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -111,13 +113,16 @@ protected:
     shared_ptr<Mp4Encoder> _mp4Encoder;
     // GIF录制器
     shared_ptr<GifEncoder> _gifEncoder;
-    unique_ptr<QrCodeScanner> m_qrScanner;
-    std::thread qrScanThread;
+    static constexpr size_t QR_SCAN_WORKER_COUNT = 4;
+    std::array<std::thread, QR_SCAN_WORKER_COUNT> qrScanThreads;
     std::mutex m_qrFrameMtx;
     std::condition_variable m_qrFrameCv;
     shared_ptr<AVFrame> m_qrPendingFrame;
     uint64_t m_qrPendingGeneration = 0;
     uint64_t m_qrPendingAt = 0;
+    uint64_t m_qrFrameSequence = 0;
+    std::array<QVariantList, QR_SCAN_WORKER_COUNT> m_qrWorkerResults;
+    std::array<uint64_t, QR_SCAN_WORKER_COUNT> m_qrWorkerResultSequences {};
     std::atomic_bool m_qrThreadStop = false;
     QVariantList m_qrCodes;
     mutable mutex m_qrCodesMtx;
@@ -137,7 +142,9 @@ protected:
     void startQrScanThread();
     void stopQrScanThread();
     void enqueueQrScanFrame(const shared_ptr<AVFrame> &frame);
-    void scanQrCodes(const shared_ptr<AVFrame> &frame, uint64_t generation, uint64_t queuedAt);
+    void scanQrCodes(
+        size_t workerIndex, QrCodeScanner &scanner, const shared_ptr<AVFrame> &frame, uint64_t generation,
+        uint64_t queuedAt, uint64_t sequence);
     void updateQrCodes(const QVariantList &codes);
     void clearQrCodes();
 
