@@ -10,6 +10,7 @@
 #include <ZXing/ReadBarcode.h>
 #include <ZXing/ReaderOptions.h>
 
+#include <QDebug>
 #include <QVariantMap>
 #include <algorithm>
 #include <cmath>
@@ -244,7 +245,8 @@ int detectZxingQrCodes(const ScanImage &scanImage, int sourceWidth, int sourceHe
             }
         }
         return added;
-    } catch (const std::exception &) {
+    } catch (const std::exception &e) {
+        qWarning() << "ZXing QR scan failed:" << e.what();
         return 0;
     }
 }
