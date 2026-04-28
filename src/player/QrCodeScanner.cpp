@@ -21,8 +21,6 @@ namespace {
 
 constexpr int kValuesPerQr = 8;
 constexpr int kMaxResults = 12;
-constexpr double kGammaDarken = 1.7;
-constexpr double kGammaStrongDarken = 2.4;
 constexpr float kTrackedRoiExpand = 0.9f;
 constexpr int kMinRoiPadding = 48;
 
@@ -303,26 +301,6 @@ ScanImage makeScaledImage(const cv::Mat &image, double scale, int offsetX = 0, i
     return { resized, static_cast<float>(scale), static_cast<float>(scale), offsetX, offsetY };
 }
 
-cv::Mat applyGamma(const cv::Mat &image, double gamma) {
-    cv::Mat lookup(1, 256, CV_8UC1);
-    auto *lut = lookup.ptr<uchar>();
-    for (int i = 0; i < 256; ++i) {
-        lut[i] = cv::saturate_cast<uchar>(std::pow(i / 255.0, gamma) * 255.0);
-    }
-
-    cv::Mat corrected;
-    cv::LUT(image, lookup, corrected);
-    return corrected;
-}
-
-cv::Mat makeAdaptiveExposureImage(const cv::Mat &gray) {
-    cv::Mat darkened = applyGamma(gray, kGammaDarken);
-    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(2.2, cv::Size(8, 8));
-    cv::Mat enhanced;
-    clahe->apply(darkened, enhanced);
-    return enhanced;
-}
-
 cv::Mat makeSharpenedImage(const cv::Mat &image) {
     cv::Mat blurred;
     cv::GaussianBlur(image, blurred, cv::Size(0, 0), 1.2);
@@ -338,27 +316,16 @@ void appendProfileImages(
     int offsetY,
     std::vector<ScanImage> &images) {
     const auto appendAllProfiles = [&images, offsetX, offsetY](const cv::Mat &base) {
-        const cv::Mat adaptiveExposure = makeAdaptiveExposureImage(base);
-        const cv::Mat darkened = applyGamma(base, kGammaDarken);
-        const cv::Mat strongDarkened = applyGamma(base, kGammaStrongDarken);
-        const cv::Mat sharpened = makeSharpenedImage(adaptiveExposure);
+        const cv::Mat sharpened = makeSharpenedImage(base);
         cv::Mat thresholded;
-        cv::adaptiveThreshold(
-            adaptiveExposure, thresholded, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 31, 3);
-        cv::Mat strongThresholded;
-        cv::adaptiveThreshold(
-            strongDarkened, strongThresholded, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 41, 5);
+        cv::adaptiveThreshold(base, thresholded, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 31, 3);
 
         images.push_back(makeScaledImage(base, 1.0, offsetX, offsetY));
-        images.push_back(makeScaledImage(adaptiveExposure, 1.0, offsetX, offsetY));
-        images.push_back(makeScaledImage(darkened, 1.0, offsetX, offsetY));
-        images.push_back(makeScaledImage(strongDarkened, 1.0, offsetX, offsetY));
+        images.push_back(makeScaledImage(sharpened, 1.0, offsetX, offsetY));
         images.push_back(makeScaledImage(base, 1.6, offsetX, offsetY));
-        images.push_back(makeScaledImage(adaptiveExposure, 1.6, offsetX, offsetY));
         images.push_back(makeScaledImage(sharpened, 1.6, offsetX, offsetY));
         images.push_back(makeScaledImage(base, 0.75, offsetX, offsetY));
         images.push_back(makeScaledImage(thresholded, 1.0, offsetX, offsetY));
-        images.push_back(makeScaledImage(strongThresholded, 1.0, offsetX, offsetY));
     };
 
     if (profileIndex < 0) {
@@ -366,22 +333,19 @@ void appendProfileImages(
         return;
     }
 
-    const cv::Mat adaptiveExposure = makeAdaptiveExposureImage(gray);
     switch (profileIndex % 4) {
     case 0:
         images.push_back(makeScaledImage(gray, 1.0, offsetX, offsetY));
         break;
     case 1:
-        images.push_back(makeScaledImage(adaptiveExposure, 1.0, offsetX, offsetY));
+        images.push_back(makeScaledImage(makeSharpenedImage(gray), 1.0, offsetX, offsetY));
         break;
     case 2:
         images.push_back(makeScaledImage(gray, 1.6, offsetX, offsetY));
-        images.push_back(makeScaledImage(adaptiveExposure, 1.6, offsetX, offsetY));
         break;
     default: {
         cv::Mat thresholded;
-        cv::adaptiveThreshold(
-            adaptiveExposure, thresholded, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 31, 3);
+        cv::adaptiveThreshold(gray, thresholded, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 31, 3);
         images.push_back(makeScaledImage(gray, 0.75, offsetX, offsetY));
         images.push_back(makeScaledImage(thresholded, 1.0, offsetX, offsetY));
         break;
@@ -423,6 +387,7 @@ QrCodeScanner::QrCodeScanner()
     : m_impl(std::make_unique<Impl>()) {
     m_impl->detector.setEpsX(0.35);
     m_impl->detector.setEpsY(0.35);
+    m_impl->detector.setUseAlignmentMarkers(true);
 }
 
 QrCodeScanner::~QrCodeScanner() {

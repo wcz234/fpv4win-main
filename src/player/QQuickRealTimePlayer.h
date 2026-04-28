@@ -133,8 +133,8 @@ protected:
     std::atomic_uint64_t m_lastQrFullScanAt = 0;
     std::atomic_uint64_t m_lastQrHitAt = 0;
     static constexpr uint64_t QR_TRACK_SCAN_INTERVAL_MS = 80;
-    static constexpr uint64_t QR_IDLE_SCAN_INTERVAL_MS = 220;
-    static constexpr uint64_t QR_FULL_SCAN_INTERVAL_MS = 1000;
+    static constexpr uint64_t QR_IDLE_SCAN_INTERVAL_MS = 180;
+    static constexpr uint64_t QR_FULL_SCAN_INTERVAL_MS = 800;
     static constexpr uint64_t QR_HOLD_MS = 300;
     // 是否有声音
     bool hasAudio() {
