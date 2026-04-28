@@ -4,9 +4,16 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/objdetect.hpp>
 
+#include <ZXing/Barcode.h>
+#include <ZXing/BarcodeFormat.h>
+#include <ZXing/ImageView.h>
+#include <ZXing/ReadBarcode.h>
+#include <ZXing/ReaderOptions.h>
+
 #include <QVariantMap>
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <vector>
 
 namespace {
@@ -139,12 +146,117 @@ int appendDecodedResults(
     return added;
 }
 
+bool appendQrResultFromPoints(
+    QVariantList &results,
+    const QString &text,
+    const float *points,
+    int sourceWidth,
+    int sourceHeight) {
+    if (text.isEmpty() || !points || results.size() >= kMaxResults) {
+        return false;
+    }
+
+    float minX = points[0];
+    float maxX = points[0];
+    float minY = points[1];
+    float maxY = points[1];
+    for (int i = 1; i < 4; ++i) {
+        minX = std::min(minX, points[i * 2]);
+        maxX = std::max(maxX, points[i * 2]);
+        minY = std::min(minY, points[i * 2 + 1]);
+        maxY = std::max(maxY, points[i * 2 + 1]);
+    }
+
+    const auto qrWidth = std::max(0.0f, maxX - minX);
+    const auto qrHeight = std::max(0.0f, maxY - minY);
+    if (qrWidth < 4.0f || qrHeight < 4.0f) {
+        return false;
+    }
+
+    const float normalizedX = minX / static_cast<float>(sourceWidth);
+    const float normalizedY = minY / static_cast<float>(sourceHeight);
+    const float normalizedW = qrWidth / static_cast<float>(sourceWidth);
+    const float normalizedH = qrHeight / static_cast<float>(sourceHeight);
+    if (isDuplicateResult(results, normalizedX, normalizedY, normalizedW, normalizedH)) {
+        return false;
+    }
+
+    QVariantList normalizedPoints;
+    for (int i = 0; i < 4; ++i) {
+        QVariantMap point;
+        point.insert("x", (points[i * 2] - minX) / qrWidth);
+        point.insert("y", (points[i * 2 + 1] - minY) / qrHeight);
+        normalizedPoints.push_back(point);
+    }
+
+    QVariantMap qrItem;
+    qrItem.insert("text", text);
+    qrItem.insert("x", normalizedX);
+    qrItem.insert("y", normalizedY);
+    qrItem.insert("width", normalizedW);
+    qrItem.insert("height", normalizedH);
+    qrItem.insert("points", normalizedPoints);
+    results.push_back(qrItem);
+    return true;
+}
+
+int detectZxingQrCodes(const ScanImage &scanImage, int sourceWidth, int sourceHeight, QVariantList &results) {
+    if (scanImage.image.empty() || !scanImage.image.data || results.size() >= kMaxResults) {
+        return 0;
+    }
+
+    try {
+        ZXing::ReaderOptions options;
+        options
+            .setFormats(
+                ZXing::BarcodeFormat::QRCode | ZXing::BarcodeFormat::MicroQRCode | ZXing::BarcodeFormat::RMQRCode)
+            .setTryHarder(true)
+            .setTryRotate(true)
+            .setTryInvert(true)
+            .setTryDownscale(true)
+            .setMaxNumberOfSymbols(kMaxResults);
+
+        const ZXing::ImageView view(
+            scanImage.image.data, scanImage.image.cols, scanImage.image.rows, ZXing::ImageFormat::Lum,
+            static_cast<int>(scanImage.image.step));
+        const auto barcodes = ZXing::ReadBarcodes(view, options);
+
+        int added = 0;
+        for (const auto &barcode : barcodes) {
+            if (!barcode.isValid() || results.size() >= kMaxResults) {
+                continue;
+            }
+
+            const auto text = QString::fromUtf8(barcode.text().c_str());
+            const auto &position = barcode.position();
+            float points[kValuesPerQr] {};
+            for (int i = 0; i < 4; ++i) {
+                points[i * 2] = std::clamp(
+                    static_cast<float>(position[i].x) / scanImage.scaleX + static_cast<float>(scanImage.offsetX),
+                    0.0f, static_cast<float>(sourceWidth));
+                points[i * 2 + 1] = std::clamp(
+                    static_cast<float>(position[i].y) / scanImage.scaleY + static_cast<float>(scanImage.offsetY),
+                    0.0f, static_cast<float>(sourceHeight));
+            }
+
+            if (appendQrResultFromPoints(results, text, points, sourceWidth, sourceHeight)) {
+                ++added;
+            }
+        }
+        return added;
+    } catch (const std::exception &) {
+        return 0;
+    }
+}
+
 int detectQrCodes(
     cv::QRCodeDetector &detector,
     const ScanImage &scanImage,
     int sourceWidth,
     int sourceHeight,
     QVariantList &results) {
+    detectZxingQrCodes(scanImage, sourceWidth, sourceHeight, results);
+
     std::vector<cv::String> decodedInfo;
     cv::Mat points;
     if (detector.detectAndDecodeMulti(scanImage.image, decodedInfo, points)) {

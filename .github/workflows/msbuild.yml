@@ -53,7 +53,10 @@ jobs:
       - name: Install dependencies
         working-directory: ${{env.GITHUB_WORKSPACE}}
         run: |
-          .\vcpkg\vcpkg.exe install libusb libpcap libsodium ffmpeg opencv4[quirc] qt5 sdl2 vcpkg-tool-ninja --triplet x64-windows
+          .\vcpkg\vcpkg.exe install `
+            libusb libpcap libsodium ffmpeg opencv4[quirc] qt5 sdl2 `
+            nu-book-zxing-cpp vcpkg-tool-ninja `
+            --triplet x64-windows
 
       - name: Save vcpkg binary cache
         if: always() && steps.cache-vcpkg.outputs.cache-hit != 'true'

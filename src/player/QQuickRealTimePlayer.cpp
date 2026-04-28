@@ -90,6 +90,20 @@ QVariantList mergeQrCodeResults(const std::array<QVariantList, WorkerCount> &wor
     return merged;
 }
 
+template <size_t WorkerCount>
+QVariantList mergeCurrentQrCodeResults(
+    const std::array<QVariantList, WorkerCount> &workerResults,
+    const std::array<uint64_t, WorkerCount> &workerSequences,
+    uint64_t sequence) {
+    std::array<QVariantList, WorkerCount> currentResults;
+    for (size_t i = 0; i < WorkerCount; ++i) {
+        if (workerSequences[i] == sequence) {
+            currentResults[i] = workerResults[i];
+        }
+    }
+    return mergeQrCodeResults(currentResults);
+}
+
 } // namespace
 
 // GIF默认帧率
@@ -438,6 +452,12 @@ void QQuickRealTimePlayer::enqueueQrScanFrame(const shared_ptr<AVFrame> &frame) 
 
     {
         lock_guard<mutex> lck(m_qrFrameMtx);
+        if (m_qrPendingFrame
+            && !std::all_of(
+                m_qrWorkerResultSequences.begin(), m_qrWorkerResultSequences.end(),
+                [this](uint64_t value) { return value == m_qrFrameSequence; })) {
+            return;
+        }
         m_qrPendingFrame = frame;
         m_qrPendingGeneration = m_qrGeneration.load();
         m_qrPendingAt = now;
@@ -456,7 +476,7 @@ void QQuickRealTimePlayer::scanQrCodes(
 
     const auto codes = scanner.scanProfile(frame, static_cast<int>(workerIndex));
     QVariantList mergedCodes;
-    bool ready = false;
+    bool canUpdate = false;
     {
         lock_guard<mutex> lck(m_qrFrameMtx);
         if (sequence != m_qrFrameSequence) {
@@ -465,14 +485,13 @@ void QQuickRealTimePlayer::scanQrCodes(
 
         m_qrWorkerResults[workerIndex] = codes;
         m_qrWorkerResultSequences[workerIndex] = sequence;
-        ready = std::all_of(
+        mergedCodes = mergeCurrentQrCodeResults(m_qrWorkerResults, m_qrWorkerResultSequences, sequence);
+        const bool allDone = std::all_of(
             m_qrWorkerResultSequences.begin(), m_qrWorkerResultSequences.end(),
             [sequence](uint64_t value) { return value == sequence; });
-        if (ready) {
-            mergedCodes = mergeQrCodeResults(m_qrWorkerResults);
-        }
+        canUpdate = !mergedCodes.isEmpty() || allDone;
     }
-    if (!ready) {
+    if (!canUpdate) {
         return;
     }
 

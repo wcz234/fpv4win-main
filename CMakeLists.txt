@@ -13,6 +13,7 @@ find_package(PkgConfig REQUIRED)
 find_package(FFmpeg REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core objdetect imgproc)
 find_package(SDL2 REQUIRED)
+find_package(ZXing CONFIG REQUIRED)
 find_package(unofficial-sodium CONFIG REQUIRED)
 pkg_check_modules(LIBUSB REQUIRED IMPORTED_TARGET libusb-1.0)
 include_directories(${FFMPEG_INCLUDE_DIRS})
@@ -50,6 +51,7 @@ target_link_libraries(${PROJECT_NAME}
         Qt5::Quick ${FFMPEG_LIBRARIES}
         ${OpenCV_LIBS}
         ${SDL2_LIBRARIES}
+        ZXing::ZXing
         PkgConfig::LIBUSB
         unofficial-sodium::sodium)
 
