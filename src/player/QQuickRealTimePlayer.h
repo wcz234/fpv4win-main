@@ -121,8 +121,7 @@ protected:
     uint64_t m_qrPendingGeneration = 0;
     uint64_t m_qrPendingAt = 0;
     uint64_t m_qrFrameSequence = 0;
-    std::array<QVariantList, QR_SCAN_WORKER_COUNT> m_qrWorkerResults;
-    std::array<uint64_t, QR_SCAN_WORKER_COUNT> m_qrWorkerResultSequences {};
+    uint64_t m_qrLastResultSequence = 0;
     std::atomic_bool m_qrThreadStop = false;
     QVariantList m_qrCodes;
     mutable mutex m_qrCodesMtx;
@@ -130,8 +129,8 @@ protected:
     std::atomic_uint64_t m_qrGeneration = 0;
     std::atomic_uint64_t m_lastQrScanAt = 0;
     std::atomic_uint64_t m_lastQrHitAt = 0;
-    static constexpr uint64_t QR_SCAN_INTERVAL_MS = 200;
-    static constexpr uint64_t QR_HOLD_MS = 800;
+    static constexpr uint64_t QR_SCAN_INTERVAL_MS = 80;
+    static constexpr uint64_t QR_HOLD_MS = 300;
     // 是否有声音
     bool hasAudio() {
         if (!decoder) {
@@ -143,8 +142,8 @@ protected:
     void stopQrScanThread();
     void enqueueQrScanFrame(const shared_ptr<AVFrame> &frame);
     void scanQrCodes(
-        size_t workerIndex, QrCodeScanner &scanner, const shared_ptr<AVFrame> &frame, uint64_t generation,
-        uint64_t queuedAt, uint64_t sequence);
+        QrCodeScanner &scanner, const shared_ptr<AVFrame> &frame, uint64_t generation, uint64_t queuedAt,
+        uint64_t sequence);
     void updateQrCodes(const QVariantList &codes);
     void clearQrCodes();
 

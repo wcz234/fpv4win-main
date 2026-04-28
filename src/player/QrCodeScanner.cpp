@@ -21,6 +21,7 @@ namespace {
 
 constexpr int kValuesPerQr = 8;
 constexpr int kMaxResults = 12;
+constexpr double kGammaDarken = 1.7;
 
 struct ScanImage {
     cv::Mat image;
@@ -299,25 +300,65 @@ ScanImage makeScaledImage(const cv::Mat &image, double scale) {
     return { resized, static_cast<float>(scale), static_cast<float>(scale), 0, 0 };
 }
 
+cv::Mat applyGamma(const cv::Mat &image, double gamma) {
+    cv::Mat lookup(1, 256, CV_8UC1);
+    auto *lut = lookup.ptr<uchar>();
+    for (int i = 0; i < 256; ++i) {
+        lut[i] = cv::saturate_cast<uchar>(std::pow(i / 255.0, gamma) * 255.0);
+    }
+
+    cv::Mat corrected;
+    cv::LUT(image, lookup, corrected);
+    return corrected;
+}
+
+cv::Mat makeAdaptiveExposureImage(const cv::Mat &gray) {
+    cv::Mat darkened = applyGamma(gray, kGammaDarken);
+    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(2.2, cv::Size(8, 8));
+    cv::Mat enhanced;
+    clahe->apply(darkened, enhanced);
+    return enhanced;
+}
+
 void appendProfileImages(const cv::Mat &gray, int profileIndex, std::vector<ScanImage> &images) {
+    const auto appendAllProfiles = [&images](const cv::Mat &base) {
+        const cv::Mat adaptiveExposure = makeAdaptiveExposureImage(base);
+        const cv::Mat darkened = applyGamma(base, kGammaDarken);
+        cv::Mat thresholded;
+        cv::adaptiveThreshold(
+            adaptiveExposure, thresholded, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 31, 3);
+
+        images.push_back(makeScaledImage(base, 1.0));
+        images.push_back(makeScaledImage(adaptiveExposure, 1.0));
+        images.push_back(makeScaledImage(darkened, 1.0));
+        images.push_back(makeScaledImage(base, 1.6));
+        images.push_back(makeScaledImage(adaptiveExposure, 1.6));
+        images.push_back(makeScaledImage(base, 0.75));
+        images.push_back(makeScaledImage(thresholded, 1.0));
+    };
+
+    if (profileIndex < 0) {
+        appendAllProfiles(gray);
+        return;
+    }
+
+    const cv::Mat adaptiveExposure = makeAdaptiveExposureImage(gray);
     switch (profileIndex % 4) {
     case 0:
         images.push_back(makeScaledImage(gray, 1.0));
         break;
     case 1:
-        images.push_back(makeScaledImage(gray, 1.6));
+        images.push_back(makeScaledImage(adaptiveExposure, 1.0));
         break;
     case 2:
-        images.push_back(makeScaledImage(gray, 0.7));
+        images.push_back(makeScaledImage(gray, 1.6));
+        images.push_back(makeScaledImage(adaptiveExposure, 1.6));
         break;
     default: {
-        cv::Mat equalized;
-        cv::equalizeHist(gray, equalized);
-        images.push_back(makeScaledImage(equalized, 1.0));
-
         cv::Mat thresholded;
         cv::adaptiveThreshold(
-            equalized, thresholded, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 31, 3);
+            adaptiveExposure, thresholded, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 31, 3);
+        images.push_back(makeScaledImage(gray, 0.75));
         images.push_back(makeScaledImage(thresholded, 1.0));
         break;
     }
@@ -350,7 +391,7 @@ QVariantList QrCodeScanner::scan(const std::shared_ptr<AVFrame> &frame) {
         return {};
     }
 
-    return scanProfile(frame, 0);
+    return scanProfile(frame, -1);
 }
 
 QVariantList QrCodeScanner::scanProfile(const std::shared_ptr<AVFrame> &frame, int profileIndex) {

@@ -102,7 +102,7 @@ ApplicationWindow {
                             const ctx = getContext("2d");
                             ctx.clearRect(0, 0, width, height);
                             ctx.strokeStyle = "#1cff2f";
-                            ctx.lineWidth = 4;
+                            ctx.lineWidth = 6;
                             ctx.lineJoin = "round";
                             ctx.lineCap = "round";
                             ctx.beginPath();
@@ -128,9 +128,11 @@ ApplicationWindow {
                     Rectangle {
                         id: qrLabel
                         x: 0
-                        y: qrItem.y > 34 ? -34 : Math.min(qrItem.height + 4, qrOverlay.height - qrItem.y - height)
-                        width: Math.min(qrOverlay.width - qrItem.x, Math.max(48, qrText.implicitWidth + 14))
-                        height: Math.max(28, qrText.implicitHeight + 8)
+                        y: qrItem.y > 48
+                           ? -48
+                           : Math.max(0, Math.min(qrItem.height + 6, qrOverlay.height - qrItem.y - height))
+                        width: Math.min(qrOverlay.width - qrItem.x, Math.max(72, qrText.implicitWidth + 20))
+                        height: Math.max(40, qrText.implicitHeight + 12)
                         radius: 4
                         color: "#cc063b16"
                         border.color: "#1cff2f"
@@ -141,11 +143,11 @@ ApplicationWindow {
                             anchors.left: parent.left
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
-                            anchors.leftMargin: 7
-                            anchors.rightMargin: 7
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 10
                             text: (index + 1) + ": " + (modelData.text || "")
                             color: "#ffffff"
-                            font.pixelSize: 16
+                            font.pixelSize: 24
                             font.bold: true
                             elide: Text.ElideRight
                             horizontalAlignment: Text.AlignLeft

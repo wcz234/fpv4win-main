@@ -31,79 +31,6 @@ void printQrCodes(const QVariantList &codes) {
     }
 }
 
-float qrIoU(const QVariantMap &a, const QVariantMap &b) {
-    const float ax1 = a.value("x").toFloat();
-    const float ay1 = a.value("y").toFloat();
-    const float ax2 = ax1 + a.value("width").toFloat();
-    const float ay2 = ay1 + a.value("height").toFloat();
-    const float bx1 = b.value("x").toFloat();
-    const float by1 = b.value("y").toFloat();
-    const float bx2 = bx1 + b.value("width").toFloat();
-    const float by2 = by1 + b.value("height").toFloat();
-
-    const float ix1 = std::max(ax1, bx1);
-    const float iy1 = std::max(ay1, by1);
-    const float ix2 = std::min(ax2, bx2);
-    const float iy2 = std::min(ay2, by2);
-    const float intersection = std::max(0.0f, ix2 - ix1) * std::max(0.0f, iy2 - iy1);
-    const float areaA = std::max(0.0f, ax2 - ax1) * std::max(0.0f, ay2 - ay1);
-    const float areaB = std::max(0.0f, bx2 - bx1) * std::max(0.0f, by2 - by1);
-    const float unionArea = areaA + areaB - intersection;
-    return unionArea > 0.0f ? intersection / unionArea : 0.0f;
-}
-
-bool isSameQrPosition(const QVariantMap &a, const QVariantMap &b) {
-    if (qrIoU(a, b) > 0.55f) {
-        return true;
-    }
-
-    const float ax = a.value("x").toFloat();
-    const float ay = a.value("y").toFloat();
-    const float aw = a.value("width").toFloat();
-    const float ah = a.value("height").toFloat();
-    const float bx = b.value("x").toFloat();
-    const float by = b.value("y").toFloat();
-    const float bw = b.value("width").toFloat();
-    const float bh = b.value("height").toFloat();
-    const float centerDistance = std::hypot((ax + aw * 0.5f) - (bx + bw * 0.5f), (ay + ah * 0.5f) - (by + bh * 0.5f));
-    return centerDistance < 0.025f && std::abs(aw - bw) < 0.06f && std::abs(ah - bh) < 0.06f;
-}
-
-template <size_t WorkerCount>
-QVariantList mergeQrCodeResults(const std::array<QVariantList, WorkerCount> &workerResults) {
-    QVariantList merged;
-    for (const auto &results : workerResults) {
-        for (const auto &item : results) {
-            const auto candidate = item.toMap();
-            bool duplicate = false;
-            for (const auto &existingItem : merged) {
-                if (isSameQrPosition(existingItem.toMap(), candidate)) {
-                    duplicate = true;
-                    break;
-                }
-            }
-            if (!duplicate) {
-                merged.push_back(item);
-            }
-        }
-    }
-    return merged;
-}
-
-template <size_t WorkerCount>
-QVariantList mergeCurrentQrCodeResults(
-    const std::array<QVariantList, WorkerCount> &workerResults,
-    const std::array<uint64_t, WorkerCount> &workerSequences,
-    uint64_t sequence) {
-    std::array<QVariantList, WorkerCount> currentResults;
-    for (size_t i = 0; i < WorkerCount; ++i) {
-        if (workerSequences[i] == sequence) {
-            currentResults[i] = workerResults[i];
-        }
-    }
-    return mergeQrCodeResults(currentResults);
-}
-
 } // namespace
 
 // GIF默认帧率
@@ -297,7 +224,7 @@ void QQuickRealTimePlayer::stop() {
         m_qrPendingGeneration = 0;
         m_qrPendingAt = 0;
         ++m_qrFrameSequence;
-        std::fill(m_qrWorkerResultSequences.begin(), m_qrWorkerResultSequences.end(), 0);
+        m_qrLastResultSequence = 0;
     }
 
     // 打断 avformat_read_frame 的阻塞
@@ -370,7 +297,7 @@ void QQuickRealTimePlayer::setQrScanEnabled(bool enabled) {
             m_qrPendingGeneration = 0;
             m_qrPendingAt = 0;
             ++m_qrFrameSequence;
-            std::fill(m_qrWorkerResultSequences.begin(), m_qrWorkerResultSequences.end(), 0);
+            m_qrLastResultSequence = 0;
         }
         clearQrCodes();
     }
@@ -389,15 +316,10 @@ void QQuickRealTimePlayer::startQrScanThread() {
         return;
     }
     m_qrThreadStop.store(false);
-    {
-        lock_guard<mutex> lck(m_qrFrameMtx);
-        std::fill(m_qrWorkerResultSequences.begin(), m_qrWorkerResultSequences.end(), 0);
-    }
 
-    for (size_t workerIndex = 0; workerIndex < QR_SCAN_WORKER_COUNT; ++workerIndex) {
-        qrScanThreads[workerIndex] = std::thread([this, workerIndex]() {
+    for (auto &thread : qrScanThreads) {
+        thread = std::thread([this]() {
             QrCodeScanner scanner;
-            uint64_t lastSequence = 0;
             while (!m_qrThreadStop.load()) {
                 shared_ptr<AVFrame> frame;
                 uint64_t generation = 0;
@@ -405,8 +327,8 @@ void QQuickRealTimePlayer::startQrScanThread() {
                 uint64_t sequence = 0;
                 {
                     std::unique_lock<std::mutex> lck(m_qrFrameMtx);
-                    m_qrFrameCv.wait(lck, [this, &lastSequence]() {
-                        return m_qrThreadStop.load() || (m_qrPendingFrame && m_qrFrameSequence != lastSequence);
+                    m_qrFrameCv.wait(lck, [this]() {
+                        return m_qrThreadStop.load() || m_qrPendingFrame;
                     });
                     if (m_qrThreadStop.load()) {
                         return;
@@ -415,9 +337,11 @@ void QQuickRealTimePlayer::startQrScanThread() {
                     generation = m_qrPendingGeneration;
                     queuedAt = m_qrPendingAt;
                     sequence = m_qrFrameSequence;
-                    lastSequence = sequence;
+                    m_qrPendingFrame.reset();
+                    m_qrPendingGeneration = 0;
+                    m_qrPendingAt = 0;
                 }
-                scanQrCodes(workerIndex, scanner, frame, generation, queuedAt, sequence);
+                scanQrCodes(scanner, frame, generation, queuedAt, sequence);
             }
         });
     }
@@ -452,60 +376,35 @@ void QQuickRealTimePlayer::enqueueQrScanFrame(const shared_ptr<AVFrame> &frame) 
 
     {
         lock_guard<mutex> lck(m_qrFrameMtx);
-        if (m_qrPendingFrame
-            && !std::all_of(
-                m_qrWorkerResultSequences.begin(), m_qrWorkerResultSequences.end(),
-                [this](uint64_t value) { return value == m_qrFrameSequence; })) {
-            return;
-        }
         m_qrPendingFrame = frame;
         m_qrPendingGeneration = m_qrGeneration.load();
         m_qrPendingAt = now;
         ++m_qrFrameSequence;
-        std::fill(m_qrWorkerResultSequences.begin(), m_qrWorkerResultSequences.end(), 0);
     }
-    m_qrFrameCv.notify_all();
+    m_qrFrameCv.notify_one();
 }
 
 void QQuickRealTimePlayer::scanQrCodes(
-    size_t workerIndex, QrCodeScanner &scanner, const shared_ptr<AVFrame> &frame, uint64_t generation,
-    uint64_t queuedAt, uint64_t sequence) {
+    QrCodeScanner &scanner, const shared_ptr<AVFrame> &frame, uint64_t generation, uint64_t queuedAt,
+    uint64_t sequence) {
     if (!(frame && m_qrScanEnabled.load())) {
         return;
     }
 
-    const auto codes = scanner.scanProfile(frame, static_cast<int>(workerIndex));
-    QVariantList mergedCodes;
-    bool canUpdate = false;
+    const auto codes = scanner.scan(frame);
     {
         lock_guard<mutex> lck(m_qrFrameMtx);
-        if (sequence != m_qrFrameSequence) {
+        if (sequence <= m_qrLastResultSequence) {
             return;
         }
-
-        m_qrWorkerResults[workerIndex] = codes;
-        m_qrWorkerResultSequences[workerIndex] = sequence;
-        mergedCodes = mergeCurrentQrCodeResults(m_qrWorkerResults, m_qrWorkerResultSequences, sequence);
-        const bool allDone = std::all_of(
-            m_qrWorkerResultSequences.begin(), m_qrWorkerResultSequences.end(),
-            [sequence](uint64_t value) { return value == sequence; });
-        canUpdate = !mergedCodes.isEmpty() || allDone;
-    }
-    if (!canUpdate) {
-        return;
+        m_qrLastResultSequence = sequence;
     }
 
     QMetaObject::invokeMethod(
         this,
-        [this, codes = mergedCodes, generation, queuedAt, sequence]() {
+        [this, codes, generation, queuedAt]() {
             if (generation != m_qrGeneration.load()) {
                 return;
-            }
-            {
-                lock_guard<mutex> lck(m_qrFrameMtx);
-                if (sequence != m_qrFrameSequence) {
-                    return;
-                }
             }
             if (!codes.isEmpty()) {
                 m_lastQrHitAt.store(queuedAt);
