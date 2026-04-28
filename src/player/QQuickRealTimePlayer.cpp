@@ -19,13 +19,6 @@
 
 namespace {
 
-struct QrScanRegion {
-    int x = 0;
-    int y = 0;
-    int width = 0;
-    int height = 0;
-};
-
 void printQrCodes(const QVariantList &codes) {
     for (int i = 0; i < codes.size(); ++i) {
         const auto qrItem = codes.at(i).toMap();
@@ -36,23 +29,6 @@ void printQrCodes(const QVariantList &codes) {
 
         qInfo().noquote() << QStringLiteral("QR[%1]: %2").arg(i).arg(text);
     }
-}
-
-QrScanRegion makeQrScanRegion(const AVFrame &frame, size_t workerIndex) {
-    const int halfWidth = frame.width / 2;
-    const int halfHeight = frame.height / 2;
-    const int overlapX = std::max(24, frame.width / 12);
-    const int overlapY = std::max(24, frame.height / 12);
-
-    const bool rightSide = (workerIndex % 2) == 1;
-    const bool bottomSide = workerIndex >= 2;
-
-    const int left = rightSide ? std::max(0, halfWidth - overlapX) : 0;
-    const int top = bottomSide ? std::max(0, halfHeight - overlapY) : 0;
-    const int right = rightSide ? frame.width : std::min(frame.width, halfWidth + overlapX);
-    const int bottom = bottomSide ? frame.height : std::min(frame.height, halfHeight + overlapY);
-
-    return { left, top, right - left, bottom - top };
 }
 
 float qrIoU(const QVariantMap &a, const QVariantMap &b) {
@@ -478,8 +454,7 @@ void QQuickRealTimePlayer::scanQrCodes(
         return;
     }
 
-    const auto region = makeQrScanRegion(*frame, workerIndex);
-    const auto codes = scanner.scanRegion(frame, region.x, region.y, region.width, region.height);
+    const auto codes = scanner.scanProfile(frame, static_cast<int>(workerIndex));
     QVariantList mergedCodes;
     bool ready = false;
     {
