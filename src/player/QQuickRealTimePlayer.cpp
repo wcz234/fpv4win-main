@@ -121,6 +121,7 @@ shared_ptr<AVFrame> QQuickRealTimePlayer::getFrame(bool &got) {
     }
     // 缓冲，追帧机制
     _lastFrame = frame;
+    enqueueQrScanFrame(frame);
     return frame;
 }
 
@@ -160,6 +161,7 @@ void QQuickRealTimePlayer::play(const QString &playUrl) {
     playStop = false;
     m_qrGeneration.fetch_add(1);
     m_lastQrScanAt.store(0);
+    m_lastQrFullScanAt.store(0);
     m_lastQrHitAt.store(0);
     clearQrCodes();
 
@@ -202,7 +204,6 @@ void QQuickRealTimePlayer::play(const QString &playUrl) {
                     }
                     videoFrameQueue.push(frame);
                 }
-                enqueueQrScanFrame(frame);
             } catch (const exception &e) {
                 emit onError(e.what(), -2);
                 break;
@@ -217,10 +218,13 @@ void QQuickRealTimePlayer::stop() {
     playStop = true;
     m_qrGeneration.fetch_add(1);
     m_lastQrScanAt.store(0);
+    m_lastQrFullScanAt.store(0);
     m_lastQrHitAt.store(0);
     {
         lock_guard<mutex> lck(m_qrFrameMtx);
         m_qrPendingFrame.reset();
+        m_qrPendingTrackedCodes.clear();
+        m_qrPendingFullScan = true;
         m_qrPendingGeneration = 0;
         m_qrPendingAt = 0;
         ++m_qrFrameSequence;
@@ -289,11 +293,14 @@ void QQuickRealTimePlayer::setQrScanEnabled(bool enabled) {
     }
     m_qrGeneration.fetch_add(1);
     m_lastQrScanAt.store(0);
+    m_lastQrFullScanAt.store(0);
     m_lastQrHitAt.store(0);
     if (!enabled) {
         {
             lock_guard<mutex> lck(m_qrFrameMtx);
             m_qrPendingFrame.reset();
+            m_qrPendingTrackedCodes.clear();
+            m_qrPendingFullScan = true;
             m_qrPendingGeneration = 0;
             m_qrPendingAt = 0;
             ++m_qrFrameSequence;
@@ -322,6 +329,8 @@ void QQuickRealTimePlayer::startQrScanThread() {
             QrCodeScanner scanner;
             while (!m_qrThreadStop.load()) {
                 shared_ptr<AVFrame> frame;
+                QVariantList trackedCodes;
+                bool fullScan = true;
                 uint64_t generation = 0;
                 uint64_t queuedAt = 0;
                 uint64_t sequence = 0;
@@ -334,14 +343,18 @@ void QQuickRealTimePlayer::startQrScanThread() {
                         return;
                     }
                     frame = m_qrPendingFrame;
+                    trackedCodes = m_qrPendingTrackedCodes;
+                    fullScan = m_qrPendingFullScan;
                     generation = m_qrPendingGeneration;
                     queuedAt = m_qrPendingAt;
                     sequence = m_qrFrameSequence;
                     m_qrPendingFrame.reset();
+                    m_qrPendingTrackedCodes.clear();
+                    m_qrPendingFullScan = true;
                     m_qrPendingGeneration = 0;
                     m_qrPendingAt = 0;
                 }
-                scanQrCodes(scanner, frame, generation, queuedAt, sequence);
+                scanQrCodes(scanner, frame, generation, queuedAt, sequence, trackedCodes, fullScan);
             }
         });
     }
@@ -369,14 +382,28 @@ void QQuickRealTimePlayer::enqueueQrScanFrame(const shared_ptr<AVFrame> &frame) 
     const auto now = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
             .count());
-    if (now < m_lastQrScanAt.load() + QR_SCAN_INTERVAL_MS) {
+
+    QVariantList trackedCodes;
+    {
+        lock_guard<mutex> lck(m_qrCodesMtx);
+        trackedCodes = m_qrCodes;
+    }
+    const bool hasTrackedCodes = !trackedCodes.isEmpty();
+    const auto scanInterval = hasTrackedCodes ? QR_TRACK_SCAN_INTERVAL_MS : QR_IDLE_SCAN_INTERVAL_MS;
+    if (now < m_lastQrScanAt.load() + scanInterval) {
         return;
     }
     m_lastQrScanAt.store(now);
+    const bool fullScan = !hasTrackedCodes || now >= m_lastQrFullScanAt.load() + QR_FULL_SCAN_INTERVAL_MS;
+    if (fullScan) {
+        m_lastQrFullScanAt.store(now);
+    }
 
     {
         lock_guard<mutex> lck(m_qrFrameMtx);
         m_qrPendingFrame = frame;
+        m_qrPendingTrackedCodes = trackedCodes;
+        m_qrPendingFullScan = fullScan;
         m_qrPendingGeneration = m_qrGeneration.load();
         m_qrPendingAt = now;
         ++m_qrFrameSequence;
@@ -386,12 +413,12 @@ void QQuickRealTimePlayer::enqueueQrScanFrame(const shared_ptr<AVFrame> &frame) 
 
 void QQuickRealTimePlayer::scanQrCodes(
     QrCodeScanner &scanner, const shared_ptr<AVFrame> &frame, uint64_t generation, uint64_t queuedAt,
-    uint64_t sequence) {
+    uint64_t sequence, const QVariantList &trackedCodes, bool fullScan) {
     if (!(frame && m_qrScanEnabled.load())) {
         return;
     }
 
-    const auto codes = scanner.scan(frame);
+    const auto codes = scanner.scanAdaptive(frame, trackedCodes, fullScan);
     {
         lock_guard<mutex> lck(m_qrFrameMtx);
         if (sequence <= m_qrLastResultSequence) {

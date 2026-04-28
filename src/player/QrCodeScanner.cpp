@@ -22,6 +22,9 @@ namespace {
 constexpr int kValuesPerQr = 8;
 constexpr int kMaxResults = 12;
 constexpr double kGammaDarken = 1.7;
+constexpr double kGammaStrongDarken = 2.4;
+constexpr float kTrackedRoiExpand = 0.9f;
+constexpr int kMinRoiPadding = 48;
 
 struct ScanImage {
     cv::Mat image;
@@ -289,15 +292,15 @@ int detectQrCodes(
     return results.size();
 }
 
-ScanImage makeScaledImage(const cv::Mat &image, double scale) {
+ScanImage makeScaledImage(const cv::Mat &image, double scale, int offsetX = 0, int offsetY = 0) {
     if (std::abs(scale - 1.0) < 0.01) {
-        return { image, 1.0f, 1.0f, 0, 0 };
+        return { image, 1.0f, 1.0f, offsetX, offsetY };
     }
 
     cv::Mat resized;
     const auto interpolation = scale > 1.0 ? cv::INTER_CUBIC : cv::INTER_AREA;
     cv::resize(image, resized, cv::Size(), scale, scale, interpolation);
-    return { resized, static_cast<float>(scale), static_cast<float>(scale), 0, 0 };
+    return { resized, static_cast<float>(scale), static_cast<float>(scale), offsetX, offsetY };
 }
 
 cv::Mat applyGamma(const cv::Mat &image, double gamma) {
@@ -320,21 +323,42 @@ cv::Mat makeAdaptiveExposureImage(const cv::Mat &gray) {
     return enhanced;
 }
 
-void appendProfileImages(const cv::Mat &gray, int profileIndex, std::vector<ScanImage> &images) {
-    const auto appendAllProfiles = [&images](const cv::Mat &base) {
+cv::Mat makeSharpenedImage(const cv::Mat &image) {
+    cv::Mat blurred;
+    cv::GaussianBlur(image, blurred, cv::Size(0, 0), 1.2);
+    cv::Mat sharpened;
+    cv::addWeighted(image, 1.7, blurred, -0.7, 0, sharpened);
+    return sharpened;
+}
+
+void appendProfileImages(
+    const cv::Mat &gray,
+    int profileIndex,
+    int offsetX,
+    int offsetY,
+    std::vector<ScanImage> &images) {
+    const auto appendAllProfiles = [&images, offsetX, offsetY](const cv::Mat &base) {
         const cv::Mat adaptiveExposure = makeAdaptiveExposureImage(base);
         const cv::Mat darkened = applyGamma(base, kGammaDarken);
+        const cv::Mat strongDarkened = applyGamma(base, kGammaStrongDarken);
+        const cv::Mat sharpened = makeSharpenedImage(adaptiveExposure);
         cv::Mat thresholded;
         cv::adaptiveThreshold(
             adaptiveExposure, thresholded, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 31, 3);
+        cv::Mat strongThresholded;
+        cv::adaptiveThreshold(
+            strongDarkened, strongThresholded, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 41, 5);
 
-        images.push_back(makeScaledImage(base, 1.0));
-        images.push_back(makeScaledImage(adaptiveExposure, 1.0));
-        images.push_back(makeScaledImage(darkened, 1.0));
-        images.push_back(makeScaledImage(base, 1.6));
-        images.push_back(makeScaledImage(adaptiveExposure, 1.6));
-        images.push_back(makeScaledImage(base, 0.75));
-        images.push_back(makeScaledImage(thresholded, 1.0));
+        images.push_back(makeScaledImage(base, 1.0, offsetX, offsetY));
+        images.push_back(makeScaledImage(adaptiveExposure, 1.0, offsetX, offsetY));
+        images.push_back(makeScaledImage(darkened, 1.0, offsetX, offsetY));
+        images.push_back(makeScaledImage(strongDarkened, 1.0, offsetX, offsetY));
+        images.push_back(makeScaledImage(base, 1.6, offsetX, offsetY));
+        images.push_back(makeScaledImage(adaptiveExposure, 1.6, offsetX, offsetY));
+        images.push_back(makeScaledImage(sharpened, 1.6, offsetX, offsetY));
+        images.push_back(makeScaledImage(base, 0.75, offsetX, offsetY));
+        images.push_back(makeScaledImage(thresholded, 1.0, offsetX, offsetY));
+        images.push_back(makeScaledImage(strongThresholded, 1.0, offsetX, offsetY));
     };
 
     if (profileIndex < 0) {
@@ -345,24 +369,46 @@ void appendProfileImages(const cv::Mat &gray, int profileIndex, std::vector<Scan
     const cv::Mat adaptiveExposure = makeAdaptiveExposureImage(gray);
     switch (profileIndex % 4) {
     case 0:
-        images.push_back(makeScaledImage(gray, 1.0));
+        images.push_back(makeScaledImage(gray, 1.0, offsetX, offsetY));
         break;
     case 1:
-        images.push_back(makeScaledImage(adaptiveExposure, 1.0));
+        images.push_back(makeScaledImage(adaptiveExposure, 1.0, offsetX, offsetY));
         break;
     case 2:
-        images.push_back(makeScaledImage(gray, 1.6));
-        images.push_back(makeScaledImage(adaptiveExposure, 1.6));
+        images.push_back(makeScaledImage(gray, 1.6, offsetX, offsetY));
+        images.push_back(makeScaledImage(adaptiveExposure, 1.6, offsetX, offsetY));
         break;
     default: {
         cv::Mat thresholded;
         cv::adaptiveThreshold(
             adaptiveExposure, thresholded, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 31, 3);
-        images.push_back(makeScaledImage(gray, 0.75));
-        images.push_back(makeScaledImage(thresholded, 1.0));
+        images.push_back(makeScaledImage(gray, 0.75, offsetX, offsetY));
+        images.push_back(makeScaledImage(thresholded, 1.0, offsetX, offsetY));
         break;
     }
     }
+}
+
+cv::Rect trackedCodeRect(const QVariantMap &code, int sourceWidth, int sourceHeight) {
+    const float x = code.value("x").toFloat();
+    const float y = code.value("y").toFloat();
+    const float width = code.value("width").toFloat();
+    const float height = code.value("height").toFloat();
+    if (width <= 0.0f || height <= 0.0f) {
+        return {};
+    }
+
+    const float px = x * static_cast<float>(sourceWidth);
+    const float py = y * static_cast<float>(sourceHeight);
+    const float pw = width * static_cast<float>(sourceWidth);
+    const float ph = height * static_cast<float>(sourceHeight);
+    const int padX = std::max(kMinRoiPadding, static_cast<int>(pw * kTrackedRoiExpand));
+    const int padY = std::max(kMinRoiPadding, static_cast<int>(ph * kTrackedRoiExpand));
+    const int left = std::clamp(static_cast<int>(std::floor(px)) - padX, 0, sourceWidth);
+    const int top = std::clamp(static_cast<int>(std::floor(py)) - padY, 0, sourceHeight);
+    const int right = std::clamp(static_cast<int>(std::ceil(px + pw)) + padX, left, sourceWidth);
+    const int bottom = std::clamp(static_cast<int>(std::ceil(py + ph)) + padY, top, sourceHeight);
+    return { left, top, right - left, bottom - top };
 }
 
 } // namespace
@@ -419,9 +465,64 @@ QVariantList QrCodeScanner::scanProfile(const std::shared_ptr<AVFrame> &frame, i
 
     cv::Mat gray(frame->height, frame->width, CV_8UC1, impl.grayBuffer.data(), stride);
     std::vector<ScanImage> images;
-    appendProfileImages(gray, profileIndex, images);
+    appendProfileImages(gray, profileIndex, 0, 0, images);
     for (const auto &image : images) {
         detectQrCodes(impl.detector, image, frame->width, frame->height, results);
+    }
+
+    return results;
+}
+
+QVariantList QrCodeScanner::scanAdaptive(
+    const std::shared_ptr<AVFrame> &frame,
+    const QVariantList &trackedCodes,
+    bool fullScan) {
+    QVariantList results;
+    if (!(frame && frame->data[0] && frame->width > 0 && frame->height > 0)) {
+        return results;
+    }
+
+    auto &impl = *m_impl;
+    impl.convertCtx = sws_getCachedContext(
+        impl.convertCtx, frame->width, frame->height, static_cast<AVPixelFormat>(frame->format), frame->width,
+        frame->height, AV_PIX_FMT_GRAY8, SWS_BILINEAR, nullptr, nullptr, nullptr);
+    if (!impl.convertCtx) {
+        return results;
+    }
+
+    const int stride = frame->width;
+    impl.grayBuffer.resize(static_cast<size_t>(stride) * static_cast<size_t>(frame->height));
+
+    uint8_t *dstData[4] = { impl.grayBuffer.data(), nullptr, nullptr, nullptr };
+    int dstLinesize[4] = { stride, 0, 0, 0 };
+    if (sws_scale(impl.convertCtx, frame->data, frame->linesize, 0, frame->height, dstData, dstLinesize) <= 0) {
+        return results;
+    }
+
+    cv::Mat gray(frame->height, frame->width, CV_8UC1, impl.grayBuffer.data(), stride);
+    for (const auto &item : trackedCodes) {
+        if (results.size() >= kMaxResults) {
+            break;
+        }
+
+        const cv::Rect roi = trackedCodeRect(item.toMap(), frame->width, frame->height);
+        if (roi.width <= 0 || roi.height <= 0) {
+            continue;
+        }
+
+        std::vector<ScanImage> roiImages;
+        appendProfileImages(gray(roi), -1, roi.x, roi.y, roiImages);
+        for (const auto &image : roiImages) {
+            detectQrCodes(impl.detector, image, frame->width, frame->height, results);
+        }
+    }
+
+    if (fullScan || trackedCodes.isEmpty()) {
+        std::vector<ScanImage> fullImages;
+        appendProfileImages(gray, -1, 0, 0, fullImages);
+        for (const auto &image : fullImages) {
+            detectQrCodes(impl.detector, image, frame->width, frame->height, results);
+        }
     }
 
     return results;
